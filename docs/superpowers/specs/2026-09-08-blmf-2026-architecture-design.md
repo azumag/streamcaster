@@ -146,6 +146,8 @@ Automatic return on media end is configurable; default behavior for the first re
 4. Advance NEXT.
 5. Return to `IDLE` or immediately `PREPARING` if auto-prepare is enabled.
 
+`VENUE` during `ON_AIR` is only a Main OBS camera cut: it switches Main to `VRC_VENUE` while Sub keeps playing the entry for VRCDN and NDI. `ENTRY` switches Main back to `ENTRY_FULLSCREEN` without restarting Sub playback. `STANDBY` is a separate Sub-side action used between entries.
+
 ## PANIC
 
 PANIC means "safe visual fallback", not "stop streaming".
@@ -163,25 +165,24 @@ A failure in one PANIC action must not prevent the other action from being attem
 
 ## VRChat operator control
 
-Primary production path: operator-avatar OSC parameters received on the Main PC.
+Primary production path: each authorized PCVR operator runs a local OSC Bridge. VRChat talks only to `127.0.0.1`; the bridge forwards normalized authenticated commands to the central StreamCaster control service over Tailscale. Remote VRChat clients never connect directly to either OBS websocket endpoint.
 
 Commands:
 
 - `NEXT`: prepare the next queue item.
 - `TAKE`: take the ready entry on-air.
-- `VENUE`: return Main to venue and Sub to standby.
-- `PANIC`: immediate safe fallback.
+- `ENTRY`: switch Main to the still-running NDI entry feed.
+- `VENUE`: switch Main to the VRChat venue while Sub playback continues.
+- `STANDBY`: return Sub to its standby scene between entries.
+- `PANIC`: immediate safe fallback of Main to venue and Sub to standby.
 
-`STOP_STREAM`, OBS restart, and output stop are deliberately not exposed through VRChat controls.
+`STOP_STREAM`, OBS restart, and output stop are deliberately not exposed through VRChat controls. Commands are edge-triggered and debounced/idempotent so a held parameter cannot repeatedly TAKE.
 
-Commands are edge-triggered and debounced/idempotent so a held parameter cannot repeatedly TAKE.
+Multiple operators may be online concurrently. Exactly one active Director lease may issue `NEXT`, `TAKE`, `ENTRY`, `VENUE`, or `STANDBY`; any authorized operator may issue `PANIC`. A lost operator connection never changes the current program. After the Director lease expires, another operator may claim it.
 
-Optional feedback parameters from StreamCaster to VRChat:
+Tailscale restricts which users/devices can reach the control service. StreamCaster additionally authenticates each operator bridge with an operator-specific secret, logs operator and bridge identity, rejects stale/duplicate/out-of-order commands, and never trusts a caller-supplied operator name as authentication.
 
-- Ready
-- OnAir
-- Error
-- CurrentEntryIndex
+State feedback flows in the reverse direction: StreamCaster -> operator bridge over Tailscale -> local VRChat OSC. Feedback includes Ready, OnAir, Error, Director identity/state, and CurrentEntryIndex.
 
 A later world-specific Udon control path may be added only after its external-communication and authentication constraints are proven in rehearsal; it is not required for v1 production readiness.
 
