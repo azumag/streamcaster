@@ -276,7 +276,7 @@ Engineering/dangerous actions are on a separate screen with explicit confirmatio
 - Main/Sub OBS websocket authentication required.
 - Sub websocket port is allowed only from Main/event LAN; never WAN-exposed.
 - No stream key is exposed in the browser or VRChat parameter layer.
-- StreamCaster's operator API is authenticated and event-LAN/local only for production.
+- StreamCaster's operator API is authenticated and reachable only from localhost, explicitly allowed event-LAN paths, or authorized Tailscale operators for production; no public-WAN listener path is allowed.
 - The 2025 default of globally exposing the control UI is not acceptable for the 2026 production profile.
 
 ## Reuse from StreamCaster 2025

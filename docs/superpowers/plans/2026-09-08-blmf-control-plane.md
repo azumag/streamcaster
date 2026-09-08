@@ -1,6 +1,6 @@
 # BLMF Control Plane Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the BLMF 2026 safe control plane for two OBS instances and multiple remote VRChat operators connected over Tailscale, without putting StreamCaster in the media path.
 
@@ -49,7 +49,7 @@
 - `new CommandLedger({ maxAgeMs, now })`
 - `ledger.accept({ operatorId, bridgeId, sessionId, commandId, sequence, sentAt })` -> `{ ok, reason? }`
 
-- [ ] **Step 1: Write failing authentication tests**
+- [x] **Step 1: Write failing authentication tests**
 
 ```js
 const OperatorRegistry = require('../../blmf/operator_registry');
@@ -70,21 +70,21 @@ test('rejects empty operator configuration', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `cd controller && npx jest __tests__/blmf/operator_registry.test.js --runInBand`
 Expected: FAIL because `operator_registry` does not exist.
 
-- [ ] **Step 3: Implement `OperatorRegistry` minimally**
+- [x] **Step 3: Implement `OperatorRegistry` minimally**
 
 Use `crypto.timingSafeEqual` for equal-length token comparison. Parse only `id`, `token`, and optional `canPanic`; never expose tokens from public methods.
 
-- [ ] **Step 4: Run authentication tests and verify GREEN**
+- [x] **Step 4: Run authentication tests and verify GREEN**
 
 Run: `cd controller && npx jest __tests__/blmf/operator_registry.test.js --runInBand`
 Expected: PASS.
 
-- [ ] **Step 5: Write failing Director lease tests**
+- [x] **Step 5: Write failing Director lease tests**
 
 ```js
 const DirectorLease = require('../../blmf/director_lease');
@@ -109,19 +109,19 @@ test('rejects another operator until the lease expires', () => {
 });
 ```
 
-- [ ] **Step 6: Run Director lease tests and verify RED**
+- [x] **Step 6: Run Director lease tests and verify RED**
 
 Run: `cd controller && npx jest __tests__/blmf/director_lease.test.js --runInBand`
 Expected: FAIL because `director_lease` does not exist.
 
-- [ ] **Step 7: Implement `DirectorLease` and verify GREEN**
+- [x] **Step 7: Implement `DirectorLease` and verify GREEN**
 
 Expired leases are treated as absent. Release and heartbeat require the exact `{operatorId, bridgeId}` holder pair.
 
 Run: `cd controller && npx jest __tests__/blmf/director_lease.test.js --runInBand`
 Expected: PASS.
 
-- [ ] **Step 8: Write failing replay-protection tests**
+- [x] **Step 8: Write failing replay-protection tests**
 
 ```js
 const CommandLedger = require('../../blmf/command_ledger');
@@ -138,7 +138,7 @@ test('rejects duplicate, out-of-order, and stale commands', () => {
 });
 ```
 
-- [ ] **Step 9: Implement `CommandLedger`, run Task 1 tests, and commit**
+- [x] **Step 9: Implement `CommandLedger`, run Task 1 tests, and commit**
 
 Run: `cd controller && npx jest __tests__/blmf/operator_registry.test.js __tests__/blmf/director_lease.test.js __tests__/blmf/command_ledger.test.js --runInBand`
 Expected: PASS.
@@ -167,7 +167,7 @@ Commit: `git commit -am "feat: add BLMF operator command guards"` plus newly cre
 - `coordinator.execute(command)` -> `{ ok, state, reason?, panicResults? }`
 - `coordinator.snapshot()` -> state object
 
-- [ ] **Step 1: Write failing OBS adapter test**
+- [x] **Step 1: Write failing OBS adapter test**
 
 ```js
 const ObsClient = require('../../blmf/obs_client');
@@ -187,7 +187,7 @@ test('maps scene and media actions to obs-websocket v5 requests', async () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify RED, then install pinned dependency**
+- [x] **Step 2: Run and verify RED, then install pinned dependency**
 
 Run: `cd controller && npx jest __tests__/blmf/obs_client.test.js --runInBand`
 Expected: FAIL because `obs_client` does not exist.
@@ -196,11 +196,11 @@ Run: `cd controller && npm install --save-exact obs-websocket-js@5.0.7 --workspa
 
 Then from the repository root run `npm install --package-lock-only` so both the controller-local CI lockfile and root workspace lockfile record the dependency.
 
-- [ ] **Step 3: Implement `ObsClient` and verify GREEN**
+- [x] **Step 3: Implement `ObsClient` and verify GREEN**
 
 The default factory must load the CommonJS-compatible `obs-websocket-js@5.0.7` export. Connection failures leave `isConnected()` false; disconnect events also clear connection state.
 
-- [ ] **Step 4: Write failing coordinator safety tests**
+- [x] **Step 4: Write failing coordinator safety tests**
 
 ```js
 const BlmfCoordinator = require('../../blmf/coordinator');
@@ -237,7 +237,7 @@ test('TAKE is rejected unless every readiness gate is true', async () => {
 });
 ```
 
-- [ ] **Step 5: Implement coordinator commands**
+- [x] **Step 5: Implement coordinator commands**
 
 `TAKE`: readiness -> Sub `ENTRY` -> restart `entry_player` -> optional delay -> Main `ENTRY_FULLSCREEN` -> `ON_AIR`.
 `VENUE`: Main `VRC_VENUE` only.
@@ -246,7 +246,7 @@ test('TAKE is rejected unless every readiness gate is true', async () => {
 `PANIC`: `Promise.allSettled` for Main venue and Sub standby; no stream/output calls.
 `NEXT`: delegate to `preparer.prepareNext()` when present; otherwise reject with `preparer_unavailable`.
 
-- [ ] **Step 6: Run Task 2 tests and commit**
+- [x] **Step 6: Run Task 2 tests and commit**
 
 Run: `cd controller && npx jest __tests__/blmf/obs_client.test.js __tests__/blmf/coordinator.test.js --runInBand`
 Expected: PASS.
@@ -276,7 +276,7 @@ Commit: `feat: add dual OBS BLMF coordinator`.
 - `createBlmfRouter({ controlPlane, registry })` -> Express router
 - `loadBlmfConfig(env)` -> validated config
 
-- [ ] **Step 1: Write failing ControlPlane tests**
+- [x] **Step 1: Write failing ControlPlane tests**
 
 ```js
 test('requires Director lease for normal commands but not PANIC', async () => {
@@ -291,15 +291,15 @@ test('binds the Director lease to both operator and bridge', () => {
 });
 ```
 
-- [ ] **Step 2: Implement ControlPlane and verify GREEN**
+- [x] **Step 2: Implement ControlPlane and verify GREEN**
 
 Authenticate first in HTTP middleware. Run `CommandLedger.accept()` before coordinator execution. `PANIC` bypasses only the Director check, never authentication or replay protection.
 
-- [ ] **Step 3: Write failing route tests**
+- [x] **Step 3: Write failing route tests**
 
 Use Supertest with a small Express app and the actual router. Cover 401 missing token, 409 busy Director, 200 claim/heartbeat/release, 403 normal command from non-Director, 200 PANIC from backup operator, 409 stale/duplicate command, and protected state GET.
 
-- [ ] **Step 4: Implement routes and config**
+- [x] **Step 4: Implement routes and config**
 
 Endpoints:
 
@@ -317,11 +317,11 @@ GET  /api/blmf/state
 [{"id":"azumag","token":"long-random-secret","canPanic":true}]
 ```
 
-- [ ] **Step 5: Mount BLMF router behind feature flag**
+- [x] **Step 5: Mount BLMF router behind feature flag**
 
 In `controller.js`, register a BLMF router delegate before the existing 404 handler, but initialize its runtime in `startServer()` only when `BLMF_ENABLED === 'true'`. Invalid auth/config prevents listen; OBS connection failures do not stop the server and instead leave readiness false/degraded. When false, do not require operator config and leave all 2025 endpoints behaviorally unchanged.
 
-- [ ] **Step 6: Run controller regression tests and commit**
+- [x] **Step 6: Run controller regression tests and commit**
 
 Run: `cd controller && npm run lint && npm test -- --runInBand`
 Expected: all existing and BLMF tests PASS.
@@ -363,7 +363,7 @@ OSC command Int mapping:
 255 PANIC
 ```
 
-- [ ] **Step 1: Write failing edge decoder tests**
+- [x] **Step 1: Write failing edge decoder tests**
 
 ```js
 test('emits one command for a nonzero edge and waits for zero to re-arm', () => {
@@ -375,19 +375,19 @@ test('emits one command for a nonzero edge and waits for zero to re-arm', () => 
 });
 ```
 
-- [ ] **Step 2: Implement decoder and verify GREEN**
+- [x] **Step 2: Implement decoder and verify GREEN**
 
 Unknown values return `null` and do not execute a command.
 
-- [ ] **Step 3: Write failing HTTP client tests**
+- [x] **Step 3: Write failing HTTP client tests**
 
 Verify Authorization header, monotonic sequence, random command IDs, stable startup `sessionId`, `sentAt`, and that non-2xx responses return structured failures rather than throwing away server reason text.
 
-- [ ] **Step 4: Implement StreamCaster client and verify GREEN**
+- [x] **Step 4: Implement StreamCaster client and verify GREEN**
 
 Use Node 18 global `fetch`; no extra HTTP dependency.
 
-- [ ] **Step 5: Add workspace metadata and commit**
+- [x] **Step 5: Add workspace metadata and commit**
 
 Root `workspaces` becomes `['controller', 'operator-bridge']`. Bridge uses Jest 29 and `osc@2.4.5` in the next task.
 
@@ -415,11 +415,11 @@ Commit: `feat: add remote operator command bridge core`.
   - `/avatar/parameters/BLMF_IsDirector` Bool
   - `/avatar/parameters/BLMF_CurrentEntryIndex` Int
 
-- [ ] **Step 1: Write failing bridge service tests**
+- [x] **Step 1: Write failing bridge service tests**
 
 Use a fake OSC port and fake client. Verify TAKE edge -> exactly one command request, CLAIM/RELEASE map to Director endpoints, backup PANIC works without Director, state changes produce OSC feedback only when values change, and a failed poll/heartbeat logs an error but never synthesizes a production command.
 
-- [ ] **Step 2: Install OSC dependency and implement service**
+- [x] **Step 2: Install OSC dependency and implement service**
 
 Run from repository root: `npm install --workspace operator-bridge --save-exact osc@2.4.5`
 
@@ -437,11 +437,11 @@ VRCHAT_OSC_IN_PORT=9001
 VRCHAT_OSC_OUT_PORT=9000
 ```
 
-- [ ] **Step 3: Add CLI startup fail-closed validation**
+- [x] **Step 3: Add CLI startup fail-closed validation**
 
 Missing `STREAMCASTER_URL`, `BLMF_OPERATOR_TOKEN`, or `BLMF_BRIDGE_ID` exits nonzero before opening OSC sockets. The token is never logged.
 
-- [ ] **Step 4: Run bridge tests and commit**
+- [x] **Step 4: Run bridge tests and commit**
 
 Run: `cd operator-bridge && npm test -- --runInBand`
 Expected: PASS.
@@ -463,7 +463,7 @@ Commit: `feat: bridge VRChat OSC over Tailscale control API`.
 - Tailscale example allows operator users/devices to reach only the StreamCaster control host/port required for BLMF.
 - Application bearer auth remains mandatory even inside the tailnet.
 
-- [ ] **Step 1: Write failing end-to-end in-process test**
+- [x] **Step 1: Write failing end-to-end in-process test**
 
 Build real `OperatorRegistry`, `DirectorLease`, `CommandLedger`, `ControlPlane`, router, and a coordinator with fake OBS adapters. Assert this sequence:
 
@@ -477,20 +477,20 @@ operator A release -> operator B claim accepted
 replayed command ID -> rejected
 ```
 
-- [ ] **Step 2: Run integration test and verify RED/GREEN**
+- [x] **Step 2: Run integration test and verify RED/GREEN**
 
 Run: `cd controller && npx jest __tests__/blmf/control_plane.integration.test.js --runInBand`
 Expected after implementation: PASS.
 
-- [ ] **Step 3: Add CI for operator bridge**
+- [x] **Step 3: Add CI for operator bridge**
 
 Matrix Node 18.x, 20.x, 22.x. Run root `npm ci`, then `npm test --workspace operator-bridge -- --runInBand`. Trigger on `operator-bridge/**`, root lock/workspace files, and its workflow file.
 
-- [ ] **Step 4: Document Tailscale and rehearsal setup**
+- [x] **Step 4: Document Tailscale and rehearsal setup**
 
 Document that Tailscale encrypts/authorizes network reachability but does not replace `BLMF_OPERATOR_TOKEN`. Include operator onboarding, claim/release, backup PANIC, lease expiry behavior, OSC enablement, local ports, and a two-location rehearsal checklist.
 
-- [ ] **Step 5: Run full verification**
+- [x] **Step 5: Run full verification**
 
 Run:
 
@@ -502,7 +502,7 @@ cd .. && git diff --check
 
 Expected: all tests PASS, lint PASS, no whitespace errors.
 
-- [ ] **Step 6: Commit final docs/CI**
+- [x] **Step 6: Commit final docs/CI**
 
 Commit: `docs: add BLMF remote operator runbook`.
 

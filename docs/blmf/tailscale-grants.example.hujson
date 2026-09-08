@@ -1,0 +1,30 @@
+{
+  // Replace identities and Tailscale IPs before use.
+  "groups": {
+    "group:blmf-operators": [
+      "operator-a@example.com",
+      "operator-b@example.com"
+    ]
+  },
+
+  // Host aliases keep human-operated Main/Sub PCs associated with their users.
+  "hosts": {
+    "blmf-controller": "100.64.0.10",
+    "blmf-sub": "100.64.0.20"
+  },
+
+  "grants": [
+    {
+      // Remote operator bridges may reach only the StreamCaster HTTP control port.
+      "src": ["group:blmf-operators"],
+      "dst": ["blmf-controller"],
+      "ip": ["tcp:8080"]
+    },
+    {
+      // Central StreamCaster may control Sub OBS, but no broad Sub-PC access is granted.
+      "src": ["blmf-controller"],
+      "dst": ["blmf-sub"],
+      "ip": ["tcp:4455"]
+    }
+  ]
+}
