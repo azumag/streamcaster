@@ -1012,3 +1012,17 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ---
 
 **StreamCaster** - Professional streaming made simple. 🎬✨
+## BLMF 2026 control plane
+
+The 2026 BLMF architecture keeps StreamCaster out of the media path. Sub OBS is the single entry-video playback clock, sends the venue feed directly to VRCDN, and exposes a high-quality Full NDI feed to Main OBS. Main OBS switches between the VRChat venue and the NDI entry feed while Twitch/YouTube outputs remain persistent.
+
+The new control plane is disabled by default with `BLMF_ENABLED=false`. When enabled, it provides:
+
+- authenticated control of separate Main/Sub OBS websocket sessions;
+- one active Director lease for normal production commands;
+- backup `PANIC` access for authorized operators;
+- stale/duplicate/out-of-order command rejection;
+- a local VRChat OSC operator bridge that can work remotely over Tailscale;
+- fail-closed TAKE behavior until asset, VRCDN, and NDI readiness are proven.
+
+See `docs/superpowers/specs/2026-09-08-blmf-2026-architecture-design.md` for the architecture and `docs/blmf/operator-bridge.md` for remote-operator setup and rehearsal.

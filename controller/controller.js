@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs-extra');
 const ProcessManager = require('./process_manager');
 const GoogleDriveManager = require('./google_drive_manager');
+const createBlmfIntegration = require('./blmf/integration');
 
 // HTTP status codes
 const HTTP_STATUS = {
@@ -29,6 +30,13 @@ const log = {
     error: (msg) => console.error(`[${new Date().toISOString()}] [ERROR] ${msg}`),
     warning: (msg) => console.warn(`[${new Date().toISOString()}] [WARNING] ${msg}`)
 };
+
+const blmfLog = {
+    info: (entry) => log.info(`BLMF ${JSON.stringify(entry)}`),
+    warning: (entry) => log.warning(`BLMF ${JSON.stringify(entry)}`),
+    error: (entry) => log.error(`BLMF ${JSON.stringify(entry)}`)
+};
+const blmfIntegration = createBlmfIntegration({ logger: blmfLog });
 
 const app = express();
 app.use(express.json());
@@ -484,6 +492,9 @@ app.get('/api/logs', async (req, res) => {
     }
 });
 
+// BLMF 2026 control plane. Disabled by default and transparent to the 2025 API.
+app.use('/api/blmf', blmfIntegration.middleware);
+
 // エラーハンドラー
 app.use((req, res) => {
     res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Endpoint not found' });
@@ -508,6 +519,11 @@ async function startServer() {
     const googleDriveInitialized = await initializeGoogleDriveManager();
     if (!googleDriveInitialized) {
         log.warning('GoogleDriveManagerの初期化に失敗しましたが、サーバーを起動します');
+    }
+
+    const blmfStatus = await blmfIntegration.start();
+    if (blmfStatus.enabled) {
+        log.info(`BLMF制御プレーン起動: main=${blmfStatus.mainConnected}, sub=${blmfStatus.subConnected}`);
     }
 
     log.info('システム初期化完了');

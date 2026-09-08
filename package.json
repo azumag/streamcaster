@@ -4,7 +4,8 @@
   "description": "UDP to RTMP streaming system",
   "private": true,
   "workspaces": [
-    "controller"
+    "controller",
+    "operator-bridge"
   ],
   "scripts": {
     "prepare": "husky install || true",
