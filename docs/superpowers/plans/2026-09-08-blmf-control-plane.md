@@ -6,7 +6,7 @@
 
 **Architecture:** Add focused `controller/blmf/` modules for authentication, Director lease, replay protection, OBS websocket orchestration, and protected HTTP routes. Add a separate `operator-bridge/` workspace that converts local VRChat OSC button edges into authenticated HTTP commands over Tailscale and converts central state back into local OSC feedback. The existing 2025 UDP/RTMP controller remains untouched unless `BLMF_ENABLED=true`.
 
-**Tech Stack:** Node.js >=18, CommonJS, Express 4, Jest 29, Supertest, `obs-websocket-js@5.0.7`, `osc@2.4.5`, Tailscale network policy outside the application.
+**Tech Stack:** Node.js >=18, CommonJS, Express 4, Jest 29, Supertest, `obs-websocket-js@5.0.7`, Node built-in `dgram` with a minimal OSC codec, Tailscale network policy outside the application.
 
 **Spec:** `docs/superpowers/specs/2026-09-08-blmf-2026-architecture-design.md`
 
@@ -389,7 +389,7 @@ Use Node 18 global `fetch`; no extra HTTP dependency.
 
 - [x] **Step 5: Add workspace metadata and commit**
 
-Root `workspaces` becomes `['controller', 'operator-bridge']`. Bridge uses Jest 29 and `osc@2.4.5` in the next task.
+Root `workspaces` becomes `['controller', 'operator-bridge']`. Bridge uses Jest 29; the OSC transport in the next task stays dependency-free by using Node's built-in `dgram`.
 
 Commit: `feat: add remote operator command bridge core`.
 
@@ -399,8 +399,10 @@ Commit: `feat: add remote operator command bridge core`.
 
 **Files:**
 - Create: `operator-bridge/bridge_service.js`
+- Create: `operator-bridge/osc_udp_port.js`
 - Create: `operator-bridge/index.js`
 - Create: `operator-bridge/__tests__/bridge_service.test.js`
+- Create: `operator-bridge/__tests__/osc_udp_port.test.js`
 - Modify: `operator-bridge/package.json`
 - Modify: root `package-lock.json`
 
@@ -419,9 +421,9 @@ Commit: `feat: add remote operator command bridge core`.
 
 Use a fake OSC port and fake client. Verify TAKE edge -> exactly one command request, CLAIM/RELEASE map to Director endpoints, backup PANIC works without Director, state changes produce OSC feedback only when values change, and a failed poll/heartbeat logs an error but never synthesizes a production command.
 
-- [x] **Step 2: Install OSC dependency and implement service**
+- [x] **Step 2: Implement dependency-free OSC UDP transport and service**
 
-Run from repository root: `npm install --workspace operator-bridge --save-exact osc@2.4.5`
+Use Node's built-in `dgram` and a narrowly scoped OSC codec supporting the VRChat types used here (Int, Bool, Float, String). This avoids bringing an unrelated WebSocket implementation into the operator bridge.
 
 Default local ports:
 - listen to VRChat output: `127.0.0.1:9001`
@@ -505,4 +507,3 @@ Expected: all tests PASS, lint PASS, no whitespace errors.
 - [x] **Step 6: Commit final docs/CI**
 
 Commit: `docs: add BLMF remote operator runbook`.
-

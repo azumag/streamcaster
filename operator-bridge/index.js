@@ -1,4 +1,4 @@
-const osc = require('osc');
+const OscUdpPort = require('./osc_udp_port');
 const OscCommandDecoder = require('./osc_command_decoder');
 const StreamCasterClient = require('./streamcaster_client');
 const BridgeService = require('./bridge_service');
@@ -27,12 +27,11 @@ function loadConfig(env = process.env) {
 }
 
 function createService(config, logger = console) {
-    const oscPort = new osc.UDPPort({
+    const oscPort = new OscUdpPort({
         localAddress: config.oscHost,
         localPort: config.oscInPort,
         remoteAddress: config.oscHost,
-        remotePort: config.oscOutPort,
-        metadata: false
+        remotePort: config.oscOutPort
     });
     const client = new StreamCasterClient({
         baseUrl: config.streamCasterUrl,
