@@ -4,12 +4,16 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "start": "node index.js"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "devDependencies": {
     "jest": "^29.7.0"
+  },
+  "dependencies": {
+    "osc": "2.4.5"
   }
 }
