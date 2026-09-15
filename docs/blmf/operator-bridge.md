@@ -134,9 +134,33 @@ Before production, rehearse with at least two operators on different internet co
 
 ## Current implementation boundary
 
-The control plane intentionally reports entry readiness as false until the later asset/NDI phases are implemented. Therefore `TAKE` remains fail-closed until the queue/asset readiness and NDI health work is complete.
+Scene-based entries can be configured with `BLMF_ENTRIES_JSON`:
 
-This is deliberate: a partially configured BLMF control plane may be used for safe scene rehearsal, but it must not claim an entry is ready when the media path has not been verified.
+```json
+[
+  {"id":"ENTRY_001","sceneName":"ENTRY_001","mediaInput":"ENTRY_001_MEDIA"},
+  {"id":"ENTRY_002","sceneName":"ENTRY_002","mediaInput":"ENTRY_002_MEDIA"}
+]
+```
+
+Each ID, scene and media input must be unique. These are existing, independent Sub OBS Media Sources. Sub uses `STANDBY` between entries and DistroAV Main Output for the whole Program; VRCDN uses the same Program. Configure these outputs in OBS beforehand. The coordinator does not provision NDI, resolve its sender name, change stream settings, or start/stop outputs.
+
+`NEXT` selects the first entry, then the entry after the most recently started entry. It only reads readiness; it does not change Sub's scene, file or playback. Repeated NEXT retries the same selected entry instead of skipping it. A successful TAKE consumes that selection. The list does not wrap; exhausted queues require a future queue-management interface. Failed TAKE after Sub activation keeps the selection for a retry after STANDBY and NEXT. PANIC discards the pending selection.
+
+`TAKE` requires READY and rechecks readiness before activating Sub and again before switching Main. It merges OBS default input settings with explicit source settings to obtain the effective `restart_on_activate` value: activation owns the restart when true; otherwise TAKE issues one explicit restart. An unknown setting fails closed. A source already active in Program, or a selected scene already on Program, is rejected; use STANDBY first. Media must report PLAYING within ten polls spaced 100 ms apart (plus request time). Sub Program is checked after activation; both Sub Program and PLAYING are checked again immediately before Main changes. Main Program is queried after its change before reporting ON_AIR. These queries assume the PoC's cut transitions and exclusive control; they are not proof of actual received video/audio. Failures before Main's scene command leave Main unchanged; a failed post-change confirmation reports DEGRADED and requires operator reconciliation. Sources must be enabled direct children of their configured scenes, local Media Sources with `close_when_inactive=true`; groups/nested media require future support.
+
+The authenticated state/command responses include `selectedEntry`, `currentEntry`, and one-based `currentEntryIndex` (zero before any entry starts). Current means the most recently started entry; it remains identified during VENUE, STANDBY and PANIC, with `subView` distinguishing standby. Readiness is an as-of observation with `entryId`, `checkedAt` and `stale`, not continuous monitoring. Expired observations suppress READY feedback. `BLMF_HEALTH_MAX_AGE_MS` defaults to 5000 ms.
+
+The runtime accepts two internal, read-only evidence adapters:
+
+- `assetReadinessProvider(entry)` returns `{entryId, ready, observedAt}`. It must attest to validated local media actually assigned to that exact scene/input, including file identity/integrity. A configured path or source name alone is not validation.
+- `ndiHealthProvider()` returns `{healthy, observedAt}`, based on recent actual receiver media evidence. Discovery, source existence or dimensions alone are insufficient.
+
+`observedAt` is coordinator-clock epoch milliseconds. Missing, failed, future, stale or wrong-entry evidence fails closed. The runtime also checks OBS connections, enabled scene/input configuration and Sub output active without reconnecting. Output active is not proof of VRCDN venue playback. Neither adapter is wired to a production observation service in this slice: the default application remains fail-closed for NEXT/TAKE until that integration is supplied. Never substitute constant true values for real validation.
+
+Normal commands execute serially and recheck Director ownership and command age when leaving the queue. PANIC invalidates previous queued/in-progress commands and bypasses TAKE's readiness/settling waits. Each OBS safe-scene write follows any already-issued mutation on that same connection; a failed Main action does not prevent the Sub attempt. A hung in-flight OBS request can delay that same OBS's fallback, so manual OBS control remains necessary for connection failures. No stale TAKE may issue a new fullscreen change after PANIC.
+
+This slice does not add startup reconciliation, automatic media-end return, live media-position polling, file validation tooling or NDI monitoring. Use controlled scene rehearsal until those integrations and the real two-PC acceptance tests are complete.
 
 ## Network exposure requirement
 

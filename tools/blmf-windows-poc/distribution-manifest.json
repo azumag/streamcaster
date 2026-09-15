@@ -1,0 +1,25 @@
+{
+  "files": [
+    {
+      "fileVersion": "32.2.2",
+      "sha256": "e79066670cd8e8b95662f4cd417c4fa6f5b0c77e856a7b41c7de0e00059ba6f2",
+      "path": "bin/64bit/obs64.exe"
+    },
+    {
+      "fileVersion": "6.2.1",
+      "sha256": "0cb0cd42256b4a9eef7193292ecd603f64067d798a59c21c33422a7860c6478d",
+      "path": "obs-plugins/64bit/distroav.dll"
+    },
+    {
+      "fileVersion": "1.12.0",
+      "sha256": "b998df1c4c609d1ef27ca0561203fd1e196d7ed6fbca7eda45a4b0dd13d3dadd",
+      "path": "obs-plugins/64bit/win-spout.dll"
+    },
+    {
+      "fileVersion": "6.3.2.0",
+      "sha256": "2b6602075868ba4401f82f417d72424805d69b11ca86078023d0d489ff45dd84",
+      "path": "ndi-runtime/Processing.NDI.Lib.x64.dll"
+    }
+  ],
+  "description": "File hashes from the validated Windows PoC distribution; no binaries included."
+}

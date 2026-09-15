@@ -1026,3 +1026,7 @@ The new control plane is disabled by default with `BLMF_ENABLED=false`. When ena
 - fail-closed TAKE behavior until asset, VRCDN, and NDI readiness are proven.
 
 See `docs/superpowers/specs/2026-09-08-blmf-2026-architecture-design.md` for the architecture and `docs/blmf/operator-bridge.md` for remote-operator setup and rehearsal.
+
+## BLMF Windows local PoC
+
+The reproducible two-OBS setup, Web/OSC controller, media progress and reconnect UI are documented in [tools/blmf-windows-poc](tools/blmf-windows-poc/README.md). This is an isolated PoC; credentials and live OBS configuration are not stored in Git.

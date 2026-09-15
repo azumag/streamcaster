@@ -12,7 +12,9 @@
     "controller:start": "cd controller && npm start",
     "controller:test": "cd controller && npm test",
     "controller:lint": "cd controller && npm run lint",
-    "controller:ci": "cd controller && npm run ci"
+    "controller:ci": "cd controller && npm run ci",
+    "blmf:windows:test": "node tools/blmf-windows-poc/test.cjs",
+    "blmf:windows:start": "node tools/blmf-windows-poc/run.cjs"
   },
   "devDependencies": {
     "husky": "^8.0.3"

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BLMF | 放送コントローラ</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body><main>
+<button type="button" data-action="reconnect" hidden>OBSに再接続</button>
+<p>OBSを再起動したら「OBSに再接続」を押してください。シーン・再生・配信は変更しません。</p>
+<header><div><p class="eyebrow">BLMF 2026 / SHOW CONTROL</p><h1>放送コントローラ</h1></div><span class="tag">このPCから操作</span></header>
+<div id="offline" role="alert" hidden>接続が切れました。操作を止めてOBSの表示を確認してください。</div>
+<section class="toolbar access"><div><strong id="director">操作権を確認中</strong><span id="connection">接続確認中</span></div><div><button id="claim" data-action="claim">操作を開始</button><button id="release" data-action="release" class="quiet">操作を終了</button></div></section>
+<section class="onair" aria-label="現在の出力">
+ <div><p class="eyebrow">MAIN · 現在の表示</p><h2 id="main-label">確認中</h2><code id="main-scene">—</code></div>
+ <div><p class="eyebrow">SUB · 現在のシーン</p><h2 id="sub-scene">—</h2><p class="hint">VRCDN・NDIに送るシーン</p></div>
+</section>
+<p id="readback-time" class="timestamp">OBSの現在シーンを確認中</p>
+<section class="media-progress" aria-label="Subの再生進行"><div class="section-head"><h2>Subの再生進行</h2><span id="media-state">確認中</span></div><label for="media-target">進行を確認するソース</label><select id="media-target"></select><div class="media-times"><strong id="media-time">— / —</strong><span id="media-remaining">—</span></div><progress id="media-progress" max="1" value="0" aria-label="素材の再生進行"></progress><p id="media-note" class="hint small">Sub OBS上の再生位置です。会場の受信映像には配信遅延があります。</p></section>
+<div class="grid">
+<section class="panel selection-panel"><div class="section-head"><span class="number">1</span><h2>次のシーンを選ぶ</h2></div>
+<p class="hint">ここで選んでも、現在の映像は変わりません。</p>
+<label for="entry">Subのシーン一覧</label><select id="entry"><option value="">— シーンを選択 —</option></select>
+<div class="ready-row"><button data-action="previous" class="quiet">← 前を選ぶ</button><button data-action="next" class="quiet">次を選ぶ →</button><button data-action="refresh" class="quiet refresh">一覧更新</button></div>
+<p id="catalog-status" class="hint small"></p>
+<div class="take-block"><div class="section-head"><span class="number">2</span><h2>選んだシーンへ切り替える</h2></div><strong id="selected-name">未選択</strong><p id="entry-support" class="hint">切替先を選んでください。</p><button id="execute" data-action="execute" class="primary wide" aria-describedby="execute-reason">シーンを選んでください</button><p id="execute-reason" class="hint small" role="status"></p></div>
+</section>
+<section class="panel"><div class="section-head"><h2>Mainの表示だけを切り替える</h2></div>
+<p class="hint">Subのシーンや再生は変更しません。</p>
+<div class="display-buttons"><button id="venue" data-action="venue"><span>会場を映す</span><small>VRC_VENUE</small></button><button id="show-ndi" data-action="ndi"><span>Subを映す</span><small>ENTRY_FULLSCREEN</small></button></div>
+<p id="main-action-hint" class="hint small"></p>
+<div class="standby"><div><strong>Subを待機画面にする</strong><p class="hint small">VRCDN・NDIがSTANDBYに変わります。MainがSubを映している場合はMainも待機画面になります。配信の開始・停止は行いません。</p></div><button id="standby" data-action="standby" class="quiet">待機画面へ</button></div>
+</section></div>
+<section class="result-bar" aria-label="直前の操作結果"><span id="busy">待機中</span><p id="notice" role="status" aria-live="polite">現在の表示を確認してから操作してください。</p></section>
+<details class="diagnostics"><summary>接続情報・操作履歴</summary><div class="status"><div><span>Sub一覧</span><strong id="helper">未確認</strong></div><div><span>NDI計測</span><strong id="ndi">未確認</strong></div></div><p id="transport"></p><div class="ready-row"><button id="check" data-action="check" class="quiet">接続を再確認</button><span id="ready"></span></div><ol id="events"></ol><p class="hint small">Main / SubはOBSの確認結果です。配信先での受信状態は別途確認してください。</p></details>
+<footer>この画面に配信・録画の開始／停止操作はありません。</footer>
+</main></body></html>

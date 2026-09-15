@@ -92,9 +92,11 @@ describe('BlmfCoordinator', () => {
                 ndiHealthy: true
             }),
             sleep: async () => calls.push('delay'),
+            preparer: { prepareNext: async () => ({ ready: true }) },
             takeDelayMs: 25
         });
 
+        await coordinator.execute('NEXT');
         const result = await coordinator.execute('TAKE');
         expect(result.ok).toBe(true);
         expect(result.state).toBe('ON_AIR');

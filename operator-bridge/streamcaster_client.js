@@ -32,10 +32,11 @@ class StreamCasterClient {
         return this.post('/api/blmf/director/release', { bridgeId: this.bridgeId });
     }
 
-    sendCommand(command) {
+    sendCommand(command, entryId) {
         this.sequence += 1;
         return this.post('/api/blmf/commands', {
             command,
+            ...(command === 'ENTRY_SCENE' ? { entryId } : {}),
             bridgeId: this.bridgeId,
             sessionId: this.sessionId,
             commandId: this.idFactory(),

@@ -5,8 +5,10 @@ const ObsClient = require('./obs_client');
 const BlmfCoordinator = require('./coordinator');
 const ControlPlane = require('./control_plane');
 const createBlmfRouter = require('./routes');
+const DEFAULT_HEALTH_MAX_AGE_MS = 5000;
 
-function createBlmfRuntime(config, { obsClientFactory, logger = console, now = Date.now } = {}) {
+function createBlmfRuntime(config, { obsClientFactory, logger = console, now = Date.now,
+    assetReadinessProvider = async () => null, ndiHealthProvider = async () => null } = {}) {
     const registry = OperatorRegistry.fromJson(config.operatorsJson);
     const factory = obsClientFactory || ((options) => new ObsClient(options));
     const mainObs = factory({
@@ -20,23 +22,33 @@ function createBlmfRuntime(config, { obsClientFactory, logger = console, now = D
         password: config.subObsPassword
     });
 
-    const readinessProvider = async () => {
+    const healthMaxAgeMs = config.healthMaxAgeMs || DEFAULT_HEALTH_MAX_AGE_MS;
+    const isFresh = (evidence) => evidence && Number.isFinite(evidence.observedAt) &&
+        now() >= evidence.observedAt && now() - evidence.observedAt <= healthMaxAgeMs;
+    const safeRead = async (read) => {
+        try {
+            return await read();
+        } catch (_error) {
+            return null;
+        }
+    };
+    const readinessProvider = async (entry) => {
         const mainConnected = mainObs.isConnected();
         const subConnected = subObs.isConnected();
-        let vrcdnActive = false;
-        if (subConnected) {
-            try {
-                vrcdnActive = await subObs.getStreamActive();
-            } catch (_error) {
-                vrcdnActive = false;
-            }
-        }
+        const [vrcdnActive, inspection, asset, ndi] = await Promise.all([
+            subConnected ? safeRead(() => subObs.getStreamActive()) : false,
+            subConnected && entry ? safeRead(() => subObs.inspectEntry(entry)) : null,
+            subConnected && entry ? safeRead(() => assetReadinessProvider(entry)) : null,
+            mainConnected ? safeRead(() => ndiHealthProvider()) : null
+        ]);
         return {
-            mainConnected,
-            subConnected,
-            assetReady: false,
-            vrcdnActive,
-            ndiHealthy: false
+            mainConnected: mainConnected && mainObs.isConnected(),
+            subConnected: subConnected && subObs.isConnected(),
+            assetReady: !!(entry && inspection && inspection.configured && isFresh(asset) &&
+                asset.entryId === entry.id && asset.ready === true),
+            vrcdnActive: vrcdnActive === true,
+            ndiHealthy: !!(isFresh(ndi) && ndi.healthy === true),
+            validUntil: Math.min(asset && asset.observedAt || 0, ndi && ndi.observedAt || 0) + healthMaxAgeMs
         };
     };
 
@@ -46,7 +58,10 @@ function createBlmfRuntime(config, { obsClientFactory, logger = console, now = D
         readinessProvider,
         scenes: config.scenes,
         mediaInput: config.mediaInput,
-        takeDelayMs: config.takeDelayMs
+        takeDelayMs: config.takeDelayMs,
+        entries: config.entries,
+        healthMaxAgeMs: config.healthMaxAgeMs,
+        now
     });
     const lease = new DirectorLease({ ttlMs: config.directorLeaseTtlMs, now });
     const ledger = new CommandLedger({ maxAgeMs: config.commandMaxAgeMs, now });

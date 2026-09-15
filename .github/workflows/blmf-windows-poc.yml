@@ -1,0 +1,24 @@
+name: BLMF Windows PoC reproduction
+on:
+  pull_request:
+    paths: ['tools/blmf-windows-poc/**', 'controller/blmf/**', 'operator-bridge/**', 'package*.json', '.github/workflows/blmf-windows-poc.yml']
+  push:
+    branches: [main]
+    paths: ['tools/blmf-windows-poc/**', 'controller/blmf/**', 'operator-bridge/**', 'package*.json', '.github/workflows/blmf-windows-poc.yml']
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run blmf:windows:test
+      - run: python tools/blmf-windows-poc/setup_test.py
