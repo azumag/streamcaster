@@ -14,7 +14,10 @@ class SetupTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.home = Path(self.tmp.name) / 'new installation'
+        # Resolve here too: setup.create() resolves `home`, and on Windows CI
+        # runners the temp dir can be reported in short (8.3) form, which
+        # would otherwise mismatch the long-form path create() returns.
+        self.home = (Path(self.tmp.name) / 'new installation').resolve()
 
     def test_isolated_config_safe_defaults_and_portability(self):
         setup.create(self.home, config_only=True)
