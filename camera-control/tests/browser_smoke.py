@@ -14,7 +14,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aiohttp import web
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 from osc_codec import encode, decode
 from server import Config, ENGINE, create_app
 
@@ -67,21 +67,23 @@ async def main():
                 assert len(mock.messages)==0
                 await page.locator('#token').fill(config.token)
                 await page.locator('#connect').click()
-                await page.wait_for_function("document.getElementById('connection').textContent === '認証済み'")
+                # Locator assertions, not wait_for_function: the app's own CSP
+                # (script-src 'self') blocks evaluating a string as JavaScript.
+                await expect(page.locator('#connection')).to_have_text('認証済み')
                 await page.locator('#claim').click()
-                await page.wait_for_function("document.getElementById('owner').textContent === 'あなたが操作中'")
+                await expect(page.locator('#owner')).to_have_text('あなたが操作中')
                 await page.locator('#mode').select_option('6')
                 await asyncio.sleep(0.2)
                 assert mock.mode==6
                 await page.locator('#arm').click()
-                await page.wait_for_function("document.getElementById('armStatus').textContent === 'ARM済み'")
+                await expect(page.locator('#armStatus')).to_have_text('ARM済み')
                 await page.keyboard.down('KeyW'); await asyncio.sleep(0.25); await page.keyboard.up('KeyW')
                 await asyncio.sleep(0.15)
                 assert mock.pose[2]>20, mock.pose
                 count=len(mock.messages); await asyncio.sleep(0.2); assert len(mock.messages)==count
                 await page.locator('#name1').fill('ステージ全景')
                 await page.locator('[data-save="1"]').click()
-                await page.wait_for_function("document.getElementById('presetState1').textContent === 'ステージ全景'")
+                await expect(page.locator('#presetState1')).to_have_text('ステージ全景')
                 await page.locator('[data-recall="1"]').click()
                 await asyncio.sleep(0.2)
                 await page.locator('#stop').click()

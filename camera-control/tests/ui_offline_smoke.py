@@ -31,7 +31,7 @@ async def main():
   browser=await p.chromium.launch(headless=True,executable_path=os.getenv('CAMERA_TEST_BROWSER_PATH') or shutil.which('chromium'))
   page=await browser.new_page(viewport={'width':1440,'height':1100}); errors=[]
   page.on('pageerror',lambda e:errors.append(str(e)))
-  html=ROOT.joinpath('index.html').read_text()
+  html=ROOT.joinpath('index.html').read_text(encoding='utf-8')
   html=re.sub(r'<link[^>]+>|<script[^>]+></script>','',html)
   await page.set_content(html)
   await page.add_style_tag(path=str(ROOT/'style.css'))
