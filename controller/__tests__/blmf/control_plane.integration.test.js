@@ -16,6 +16,40 @@ function payload(command, sequence, commandId, bridgeId) {
 }
 
 describe('BLMF control plane integration', () => {
+    test.each([
+        [10001, 'stale_command'], [15001, 'director_required']
+    ])('revalidates queued command age and Director ownership after %i ms', async (advance, reason) => {
+        let time = 10000;
+        let finish;
+        let entered;
+        const pending = new Promise((resolve) => {
+            finish = resolve;
+        });
+        const started = new Promise((resolve) => {
+            entered = resolve;
+        });
+        const mainObs = { setProgramScene: jest.fn(() => {
+            entered();
+            return pending;
+        }) };
+        const subObs = { setProgramScene: jest.fn().mockResolvedValue() };
+        const coordinator = new BlmfCoordinator({ mainObs, subObs });
+        const plane = new ControlPlane({ coordinator,
+            lease: new DirectorLease({ ttlMs: 15000, now: () => time }),
+            ledger: new CommandLedger({ maxAgeMs: 10000, now: () => time }),
+            logger: { info: jest.fn(), warning: jest.fn() }
+        });
+        const operator = { id: 'director', canPanic: true };
+        plane.claim(operator, 'bridge');
+        const venue = plane.command(operator, payload('VENUE', 1, 'first', 'bridge'));
+        await started;
+        const standby = plane.command(operator, payload('STANDBY', 2, 'second', 'bridge'));
+        time += advance;
+        finish();
+        expect((await venue).ok).toBe(true);
+        expect(await standby).toMatchObject({ ok: false, reason });
+        expect(subObs.setProgramScene).not.toHaveBeenCalled();
+    });
     test('enforces Director ownership, safe PANIC, readiness, and replay protection end-to-end', async () => {
         const registry = OperatorRegistry.fromJson(JSON.stringify([
             { id: 'operator-a', token: 'token-a', canPanic: true },

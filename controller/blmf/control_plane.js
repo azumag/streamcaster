@@ -30,7 +30,8 @@ class ControlPlane {
     }
 
     async command(operator, payload) {
-        if (!payload || !ALLOWED_COMMANDS.has(payload.command)) {
+        if (!payload || (!ALLOWED_COMMANDS.has(payload.command) &&
+            !(payload.command === 'ENTRY_SCENE' && this.coordinator.pocEntrySceneEnabled === true))) {
             return { ok: false, reason: 'invalid_command' };
         }
 
@@ -57,7 +58,13 @@ class ControlPlane {
             return { ok: false, reason: 'director_required', director: this.lease.snapshot() };
         }
 
-        const result = await this.coordinator.execute(payload.command);
+        const result = payload.command === 'PANIC'
+            ? await this.coordinator.execute(payload.command)
+            : await this.coordinator.execute(payload.command, {
+                entryId: payload.entryId,
+                authorize: () => this.lease.isDirector(operator.id, payload.bridgeId),
+                isFresh: () => this.ledger.isFresh(payload.sentAt)
+            });
         this.logger.info({
             event: 'blmf_command',
             operatorId: operator.id,

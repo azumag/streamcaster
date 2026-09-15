@@ -11,7 +11,7 @@ class CommandLedger {
             return { ok: false, reason: 'invalid_envelope' };
         }
 
-        if (this.now() - envelope.sentAt > this.maxAgeMs || envelope.sentAt - this.now() > this.maxAgeMs) {
+        if (!this.isFresh(envelope.sentAt)) {
             return { ok: false, reason: 'stale_command' };
         }
 
@@ -28,6 +28,10 @@ class CommandLedger {
         this.commandIds.add(envelope.commandId);
         this.lastSequences.set(sequenceKey, envelope.sequence);
         return { ok: true };
+    }
+
+    isFresh(sentAt) {
+        return Number.isFinite(sentAt) && Math.abs(this.now() - sentAt) <= this.maxAgeMs;
     }
 
     isValidEnvelope(envelope) {

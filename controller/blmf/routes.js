@@ -66,12 +66,17 @@ function statusFor(result) {
     case 'not_ready':
     case 'ndi_not_ready':
     case 'preparer_unavailable':
+    case 'queue_exhausted':
+    case 'entry_not_inactive':
+    case 'cancelled_by_panic':
         return HTTP_STATUS.CONFLICT;
     case 'bridge_id_required':
     case 'invalid_command':
     case 'invalid_envelope':
         return HTTP_STATUS.BAD_REQUEST;
     case 'command_failed':
+    case 'media_not_playing':
+    case 'program_not_confirmed':
         return HTTP_STATUS.SERVICE_UNAVAILABLE;
     default:
         return HTTP_STATUS.INTERNAL_SERVER_ERROR;

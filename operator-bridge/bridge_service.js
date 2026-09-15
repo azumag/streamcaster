@@ -12,6 +12,7 @@ class BridgeService {
         oscPort,
         client,
         decoder,
+        pocEntrySceneEnabled = false,
         pollIntervalMs = 1000,
         heartbeatIntervalMs = 5000,
         logger = console,
@@ -21,6 +22,7 @@ class BridgeService {
         this.oscPort = oscPort;
         this.client = client;
         this.decoder = decoder;
+        this.pocEntrySceneEnabled = pocEntrySceneEnabled === true;
         this.pollIntervalMs = pollIntervalMs;
         this.heartbeatIntervalMs = heartbeatIntervalMs;
         this.logger = logger;
@@ -79,6 +81,13 @@ class BridgeService {
     }
 
     async handleOscMessage(message) {
+        if (this.pocEntrySceneEnabled && message?.address === '/blmf/poc/entry-scene') {
+            const entryId = this.extractValue(message);
+            if (!['ENTRY_001', 'ENTRY_002'].includes(entryId)) {
+                return { ok: false, reason: 'unknown_entry' };
+            }
+            return this.client.sendCommand('ENTRY_SCENE', entryId);
+        }
         if (!message || message.address !== COMMAND_ADDRESS) {
             return null;
         }

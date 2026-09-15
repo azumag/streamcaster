@@ -1,5 +1,6 @@
 const DEFAULT_DIRECTOR_LEASE_TTL_MS = 15000;
 const DEFAULT_COMMAND_MAX_AGE_MS = 10000;
+const DEFAULT_HEALTH_MAX_AGE_MS = 5000;
 
 function loadBlmfConfig(env = process.env) {
     if (env.BLMF_ENABLED !== 'true') {
@@ -21,6 +22,8 @@ function loadBlmfConfig(env = process.env) {
         directorLeaseTtlMs: positiveInt(env.BLMF_DIRECTOR_LEASE_TTL_MS, DEFAULT_DIRECTOR_LEASE_TTL_MS),
         commandMaxAgeMs: positiveInt(env.BLMF_COMMAND_MAX_AGE_MS, DEFAULT_COMMAND_MAX_AGE_MS),
         takeDelayMs: nonNegativeInt(env.BLMF_MAIN_TAKE_DELAY_MS, 0),
+        entries: parseEntries(env.BLMF_ENTRIES_JSON),
+        healthMaxAgeMs: positiveInt(env.BLMF_HEALTH_MAX_AGE_MS, DEFAULT_HEALTH_MAX_AGE_MS),
         mediaInput: env.BLMF_ENTRY_MEDIA_INPUT || 'entry_player',
         scenes: {
             mainVenue: env.BLMF_MAIN_VENUE_SCENE || 'VRC_VENUE',
@@ -29,6 +32,25 @@ function loadBlmfConfig(env = process.env) {
             subStandby: env.BLMF_SUB_STANDBY_SCENE || 'STANDBY'
         }
     };
+}
+
+function parseEntries(value) {
+    if (value === undefined) {
+        return [];
+    }
+    let entries;
+    try {
+        entries = JSON.parse(value);
+    } catch (_error) {
+        throw new Error('BLMF_ENTRIES_JSON must be a non-empty array of unique id/sceneName/mediaInput mappings');
+    }
+    const fields = ['id', 'sceneName', 'mediaInput'];
+    if (!Array.isArray(entries) || entries.length === 0 || entries.some((entry) =>
+        !entry || fields.some((field) => typeof entry[field] !== 'string' || !entry[field].trim())
+    ) || fields.some((field) => new Set(entries.map((entry) => entry[field])).size !== entries.length)) {
+        throw new Error('BLMF_ENTRIES_JSON must be a non-empty array of unique id/sceneName/mediaInput mappings');
+    }
+    return entries.map(({ id, sceneName, mediaInput }) => ({ id, sceneName, mediaInput }));
 }
 
 function requireValue(env, key) {
