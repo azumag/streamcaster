@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 ENGINE = web.AppKey('engine', Engine)
 CONFIG = web.AppKey('config', object)
 CLIENTS = web.AppKey('clients', set)
+OPERATORS = web.AppKey('operators', dict)
 HEADERS = {
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; "
                                "connect-src 'self'; img-src 'self'; base-uri 'none'; "
@@ -31,7 +32,6 @@ HEADERS = {
 
 @dataclass(frozen=True)
 class Config:
-    token: str
     port: int = 8765
     feedback_port: int = 9001
     osc_port: int = 9000
@@ -41,8 +41,6 @@ class Config:
     presets: Path = ROOT / '.data' / 'presets.json'
 
     def __post_init__(self):
-        if not isinstance(self.token, str) or not 32 <= len(self.token.encode('utf-8')) <= 256:
-            raise ValueError('CAMERA_CONTROL_TOKEN must contain 32-256 UTF-8 bytes')
         for value in (self.port, self.feedback_port, self.osc_port):
             if type(value) is not int or not 1 <= value <= 65535:
                 raise ValueError('Ports must be integers in 1-65535')
@@ -136,10 +134,32 @@ async def health(request):
     return web.json_response({'service': 'streamcaster-camera-control', 'http': 'ready'})
 
 
+def operator_label(request, config):
+    """Who is asking, per Tailscale Serve, or None when nothing vouches for them.
+
+    Serve adds identity headers to tailnet traffic and omits them for Funnel, so
+    demanding one on the published origin keeps the public internet out even if
+    Funnel is switched on by mistake. The loopback origins are physical access to
+    the VRChat PC itself. Headers are only trustworthy because this process binds
+    to 127.0.0.1: any other local process could forge them.
+    """
+    origin = request.headers.get('Origin')
+    login = request.headers.get('Tailscale-User-Login', '')
+    if not isinstance(login, str) or len(login) > 254 or '\n' in login or '\r' in login:
+        return None
+    if origin == config.public_origin:
+        return login or None
+    return login or 'localhost'
+
+
 async def websocket(request):
     config, engine = request.app[CONFIG], request.app[ENGINE]
     if request.headers.get('Origin') not in config.origins:
         raise web.HTTPForbidden(text='Origin not allowed')
+    operator = operator_label(request, config)
+    if operator is None:
+        # No tailnet identity on the published origin: Funnel or a bare proxy.
+        raise web.HTTPForbidden(text='Tailscale identity required')
     clients = request.app[CLIENTS]
     if len(clients) >= 16:
         raise web.HTTPServiceUnavailable(text='Connection limit')
@@ -155,9 +175,13 @@ async def websocket(request):
             await asyncio.wait_for(ws.send_json(value), timeout=1)
 
     async def publish():
+        operators = request.app[OPERATORS]
         try:
             while not ws.closed:
-                await send({**engine.state(), 'client': client})
+                state = engine.state()
+                # Name the holder so a shared surface shows who is driving.
+                state['ownerName'] = operators.get(state['owner'])
+                await send({**state, 'client': client, 'operator': operator})
                 await asyncio.sleep(0.1)
         except (ConnectionError, RuntimeError, asyncio.TimeoutError):
             engine.release(client)
@@ -165,14 +189,8 @@ async def websocket(request):
 
     try:
         await ws.prepare(request)
-        first = await ws.receive(timeout=5)
-        msg = parse_message(first.data) if first.type == WSMsgType.TEXT else {}
-        token = msg.get('token')
-        if (msg.get('op') != 'auth' or not isinstance(token, str)
-                or not secrets.compare_digest(token.encode('utf-8'), config.token.encode('utf-8'))):
-            await ws.close(code=1008, message=b'Authentication failed')
-            return ws
-        await send({'type': 'authenticated', 'client': client})
+        request.app[OPERATORS][client] = operator
+        await send({'type': 'authenticated', 'client': client, 'operator': operator})
         publisher = asyncio.create_task(publish())
         window, count = time.monotonic(), 0
         async for event in ws:
@@ -209,6 +227,7 @@ async def websocket(request):
     finally:
         engine.release(client)
         clients.discard(ws)
+        request.app[OPERATORS].pop(client, None)
         if publisher:
             publisher.cancel()
             with suppress(asyncio.CancelledError):
@@ -218,7 +237,7 @@ async def websocket(request):
 
 def create_app(config):
     app = web.Application(middlewares=[guard], client_max_size=4096)
-    app[CONFIG], app[CLIENTS] = config, set()
+    app[CONFIG], app[CLIENTS], app[OPERATORS] = config, set(), {}
     transport = None
 
     def send(address, values, types):
@@ -281,19 +300,15 @@ def main():
     parser.add_argument('--enable-pose-write', action='store_true')
     parser.add_argument('--presets', type=Path, default=ROOT / '.data' / 'presets.json')
     args = parser.parse_args()
-    token = os.environ.get('CAMERA_CONTROL_TOKEN')
-    generated = token is None
-    if generated:
-        token = secrets.token_urlsafe(32)
     try:
-        config = Config(token=token, port=args.port, feedback_port=args.feedback_port,
+        config = Config(port=args.port, feedback_port=args.feedback_port,
                         osc_port=args.osc_port, forward_port=args.forward_port,
                         public_origin=args.public_origin, enable_pose=args.enable_pose_write,
                         presets=args.presets)
         app = create_app(config)
-        if generated:
-            print(f'Camera access token (this run only; share privately): {token}', flush=True)
         print(f'Camera UI: http://127.0.0.1:{config.port}', flush=True)
+        print('Remote access: ' + (f'{config.public_origin} (Tailscale identity required)'
+                                   if config.public_origin else 'localhost only'), flush=True)
         print(f'OSC feedback: 127.0.0.1:{config.feedback_port}; send: 127.0.0.1:{config.osc_port}', flush=True)
         print('Pose writes: EXPERIMENTAL ENABLED' if config.enable_pose else 'Pose writes: disabled', flush=True)
         web.run_app(app, host='127.0.0.1', port=config.port, access_log=None,

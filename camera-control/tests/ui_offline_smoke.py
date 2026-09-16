@@ -8,10 +8,10 @@ window.cameraTest={messages:[]};
 const fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,udpError:null,presets:{}};
 window.WebSocket=class extends EventTarget {
  static OPEN=1;
- constructor(){super();this.readyState=1;queueMicrotask(()=>this.dispatchEvent(new Event('open')));}
+ constructor(){super();this.readyState=1;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
+  this.event({type:'authenticated',client:'offline',operator:'localhost'});this.event(fixture);});}
  event(data){this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify(data)}));}
  send(raw){const m=JSON.parse(raw);cameraTest.messages.push(m);
- if(m.op==='auth'){this.event({type:'authenticated',client:'offline'});this.event(fixture);return;}
  if(m.op==='claim')fixture.owner='offline';
  if(m.op==='release')fixture.owner=null;
  if(m.op==='arm')fixture.armed=true;
@@ -38,7 +38,6 @@ async def main():
   await page.evaluate("() => {" + FAKE + "}")
   await page.add_script_tag(path=str(ROOT/'app.js'))
   assert await page.locator('#arm').is_disabled()
-  await page.locator('#token').fill('offline-ui-test-token-not-a-secret-123456789')
   await page.locator('#connect').click()
   await page.locator('#claim').click()
   await page.locator('#mode').select_option('6')

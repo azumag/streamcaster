@@ -13,6 +13,8 @@ from engine import Engine, Presets, angle_lerp
 from osc_codec import encode, decode
 from server import Config, ENGINE, Feedback, create_app, parse_message, response_headers
 
+PUBLIC = 'https://camera.example.ts.net:8443'
+
 
 class CodecTests(unittest.TestCase):
     def test_known_pose_wire_format(self):
@@ -220,19 +222,20 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         self.udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         self.udp.bind(('127.0.0.1',0)); self.udp.setblocking(False)
         port=free_port(); feedback=free_port(socket.SOCK_DGRAM)
-        self.config=Config(token='x'*40,port=port,feedback_port=feedback,osc_port=self.udp.getsockname()[1],
-                           enable_pose=True,presets=Path(self.temp.name)/'presets.json')
+        self.config=Config(port=port,feedback_port=feedback,osc_port=self.udp.getsockname()[1],
+                           public_origin=PUBLIC,enable_pose=True,
+                           presets=Path(self.temp.name)/'presets.json')
         self.app=create_app(self.config); self.runner=web.AppRunner(self.app)
         await self.runner.setup(); await web.TCPSite(self.runner,'127.0.0.1',port).start()
         self.url=f'http://127.0.0.1:{port}'
         self.session=ClientSession(); self.sockets=[]
     async def asyncTearDown(self):
         await asyncio.gather(*(ws.close() for ws in self.sockets)); await self.session.close(); await self.runner.cleanup(); self.udp.close(); self.temp.cleanup()
-    async def connect(self,token=None,origin=None):
-        ws=await self.session.ws_connect(self.url+'/ws',origin=origin or self.url)
+    async def connect(self,origin=None,login=None):
+        headers={'Tailscale-User-Login':login} if login else None
+        ws=await self.session.ws_connect(self.url+'/ws',origin=origin or self.url,headers=headers)
         self.sockets.append(ws)
-        await ws.send_json({'op':'auth','token':token or self.config.token})
-        if token is None: self.assertEqual((await ws.receive_json())['type'],'authenticated')
+        self.assertEqual((await ws.receive_json())['type'],'authenticated')
         return ws
     async def until(self,ws,kind):
         async with asyncio.timeout(2):
@@ -243,7 +246,6 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         for path in ('/','/app.js','/style.css','/healthz'):
             async with self.session.get(self.url+path) as response:
                 self.assertEqual(response.status,200)
-                self.assertNotIn(self.config.token,await response.text())
                 self.assertIn('frame-ancestors',response.headers['Content-Security-Policy'])
         async with self.session.get(self.url+'/.data/presets.json') as response: self.assertEqual(response.status,404)
         async with self.session.get(self.url+'/?token=abc') as response: self.assertEqual(response.status,400)
@@ -251,13 +253,20 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         async with self.session.get(self.url+'/',headers={'Host':'evil.test'}) as response: self.assertEqual(response.status,403)
         with self.assertRaises(WSServerHandshakeError): await self.connect(origin='https://evil.test')
         with self.assertRaises(WSServerHandshakeError): await self.session.ws_connect(self.url+'/ws')
-    async def test_bad_auth_and_pre_auth_commands(self):
-        ws=await self.connect(token='wrong')
-        self.assertEqual((await ws.receive()).type,WSMsgType.CLOSE)
-        ws=await self.session.ws_connect(self.url+'/ws',origin=self.url)
-        await ws.send_json({'op':'set','name':'Mode','value':6})
-        self.assertEqual((await ws.receive()).type,WSMsgType.CLOSE)
-        self.assertEqual(self.app[ENGINE].sent,0)
+    async def test_published_origin_requires_tailscale_identity(self):
+        # Serve adds the header for tailnet traffic and omits it for Funnel.
+        with self.assertRaises(WSServerHandshakeError):
+            await self.session.ws_connect(self.url+'/ws',origin=PUBLIC)
+        ws=await self.connect(origin=PUBLIC,login='alice@example.com')
+        self.assertEqual((await self.until(ws,'state'))['operator'],'alice@example.com')
+    async def test_loopback_origin_is_physical_access(self):
+        ws=await self.connect()
+        self.assertEqual((await self.until(ws,'state'))['operator'],'localhost')
+    async def test_owner_is_named_for_other_operators(self):
+        alice=await self.connect(origin=PUBLIC,login='alice@example.com')
+        await alice.send_json({'op':'claim'}); await self.until(alice,'accepted')
+        bob=await self.connect(origin=PUBLIC,login='bob@example.com')
+        self.assertEqual((await self.until(bob,'state'))['ownerName'],'alice@example.com')
     async def test_authenticated_websocket_to_udp(self):
         ws=await self.connect(); await ws.send_json({'op':'claim'}); await self.until(ws,'accepted')
         await ws.send_json({'op':'set','name':'Mode','value':6})
@@ -294,16 +303,16 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
 
 class ConfigTests(unittest.TestCase):
     def test_config_guards(self):
-        for args in ({'token':'short'},{'port':0},{'osc_port':9001},{'forward_port':9000},
+        for args in ({'port':0},{'osc_port':9001},{'forward_port':9000},
                      {'public_origin':'http://camera.ts.net'},{'public_origin':'https://camera.ts.net/'},
                      {'public_origin':'https://user:pass@camera.ts.net'}):
-            with self.subTest(args=args), self.assertRaises(ValueError): Config(**({'token':'x'*40}|args))
+            with self.subTest(args=args), self.assertRaises(ValueError): Config(**args)
     def test_explicit_public_origin(self):
-        config=Config(token='x'*40,public_origin='https://camera.example.ts.net:8443')
+        config=Config(public_origin='https://camera.example.ts.net:8443')
         self.assertIn('https://camera.example.ts.net:8443',config.origins)
         self.assertIn('camera.example.ts.net:8443',config.hosts)
     def test_csp_has_exact_websocket_origins(self):
-        config=Config(token='x'*40,public_origin='https://camera.example.ts.net:8443')
+        config=Config(public_origin='https://camera.example.ts.net:8443')
         csp=response_headers(config)['Content-Security-Policy']
         self.assertIn('wss://camera.example.ts.net:8443',csp)
         self.assertIn('ws://127.0.0.1:8765',csp)
@@ -315,7 +324,7 @@ class ConfigTests(unittest.TestCase):
         class FakeEngine:
             invalid_osc=0
             def receive(self,*args): pass
-        config=Config(token='x'*40,feedback_port=9002,forward_port=9001)
+        config=Config(feedback_port=9002,forward_port=9001)
         receiver=Feedback(FakeEngine(),config); receiver.connection_made(Transport())
         payload=b'/avatar/change\0\0,s\0\0avtr_example\0\0\0\0'
         receiver.datagram_received(payload,('127.0.0.1',9000))

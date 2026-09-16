@@ -25,7 +25,8 @@ function availability() {
 function render(s) {
   state = s;
   if (!s.armed || !own()) { keys.clear(); pointers.clear(); wasMoving = false; }
-  $('owner').textContent = own() ? 'あなたが操作中' : s.owner ? '別の担当者が操作中' : '空き';
+  $('owner').textContent = own() ? 'あなたが操作中'
+    : s.owner ? `${s.ownerName || '別の担当者'}が操作中` : '空き';
   $('feedback').textContent = s.oscAge === null ? '未受信' : `${s.oscAge.toFixed(1)}秒前`;
   $('armStatus').textContent = s.armed ? (s.transitioning ? 'プリセット移動中' : 'ARM済み') : '停止 / 未ARM';
   $('poseWarning').textContent = s.poseWriteEnabled ? 'Pose書き込み試験モード。OSC受信は書き込み対応の証明ではありません。映像を見ながら少量ずつ確認してください。' : '位置操作は無効です。実機リハーサル時に --enable-pose-write で起動してください。';
@@ -50,26 +51,26 @@ function render(s) {
 $('login').addEventListener('submit', event => {
   event.preventDefault();
   if (ws) return;
-  let token = $('token').value;
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
   $('connection').textContent = '接続中'; availability();
-  ws.addEventListener('open', () => { send({op:'auth',token}); token = ''; $('token').value = ''; });
   ws.addEventListener('message', event => {
     const data = JSON.parse(event.data);
     if (data.type === 'authenticated') {
       authenticated = true; client = data.client;
-      $('connection').textContent = '認証済み'; notify('操作権を取得してください。接続しただけではカメラを動かしません。');
+      $('connection').textContent = '認証済み'; $('operator').textContent = data.operator;
+      notify('操作権を取得してください。接続しただけではカメラを動かしません。');
     } else if (data.type === 'state') render(data);
     else if (data.type === 'error') notify(data.message);
     else if (data.type === 'accepted') notify(`受付: ${data.op}（VRChatへの適用はOSC受信値・映像で確認）`);
   });
   ws.addEventListener('close', () => {
-    token = ''; clearInput(false); ws = null; authenticated = false; client = null; state = null;
+    clearInput(false); ws = null; authenticated = false; client = null; state = null;
     $('gamepad').checked = false; $('connection').textContent = '未接続'; $('owner').textContent = '未取得';
+    $('operator').textContent = '未接続';
     $('armStatus').textContent = '停止 / 未ARM'; $('feedback').textContent = '接続切断（値は履歴）';
     notify('接続が終了しました。自動再開はしません。必要に応じて再接続・操作権取得・ARMしてください。'); availability();
   });
-  ws.addEventListener('error', () => notify('接続失敗。Tailscale、public-origin、トークンとサーバーを確認してください。'));
+  ws.addEventListener('error', () => notify('接続失敗。Tailscale接続、grants/ACL、public-originとサーバーを確認してください。'));
 });
 $('disconnect').onclick = () => { clearInput(); if (ws) ws.close(); };
 for (const op of ['claim','release','arm','stop']) $(op).onclick = () => { clearInput(false); send({op}); };

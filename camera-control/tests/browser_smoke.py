@@ -49,7 +49,7 @@ async def main():
     with tempfile.TemporaryDirectory() as temp:
         mock=MockCamera()
         transport,_=await asyncio.get_running_loop().create_datagram_endpoint(lambda:mock,local_addr=('127.0.0.1',0))
-        config=Config(token='browser-smoke-test-token-'+'x'*32,port=free_port(socket.SOCK_STREAM),
+        config=Config(port=free_port(socket.SOCK_STREAM),
                       feedback_port=free_port(socket.SOCK_DGRAM),osc_port=transport.get_extra_info('sockname')[1],
                       enable_pose=True,presets=Path(temp)/'presets.json')
         app=create_app(config); runner=web.AppRunner(app)
@@ -65,7 +65,6 @@ async def main():
                 await page.goto(f'http://127.0.0.1:{config.port}')
                 assert await page.locator('#arm').is_disabled()
                 assert len(mock.messages)==0
-                await page.locator('#token').fill(config.token)
                 await page.locator('#connect').click()
                 # Locator assertions, not wait_for_function: the app's own CSP
                 # (script-src 'self') blocks evaluating a string as JavaScript.

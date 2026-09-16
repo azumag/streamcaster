@@ -9,9 +9,9 @@
 <header><div><p class="eyebrow">STREAMCASTER / SEPARATE CONTROL SURFACE</p><h1>VRChat Camera Control <span>PROTOTYPE</span></h1><p>カメラだけを遠隔操作。OCI・シーン切替パネル・OBS配信操作から独立しています。</p></div><button id="stop" class="danger" disabled>STOP · 移動停止</button></header>
 <main>
 <section class="panel connection">
-<form id="login"><label>カメラ専用アクセストークン<input id="token" type="password" minlength="32" maxlength="256" autocomplete="off" required placeholder="VRChat PCの起動時に表示されたトークン"></label><button type="submit" id="connect">接続</button><button type="button" id="disconnect" disabled>切断</button></form>
-<div class="status-grid"><div><small>ブラウザ接続</small><strong id="connection">未接続</strong></div><div><small>操作権</small><strong id="owner">未取得</strong></div><div><small>カメラOSC受信</small><strong id="feedback">未確認</strong></div><div><small>位置操作</small><strong id="armStatus">無効</strong></div></div>
-<p id="message" role="status" aria-live="polite">Tailscale HTTPS経由、またはVRChat PCのlocalhostから接続してください。</p>
+<form id="login"><button type="submit" id="connect">接続</button><button type="button" id="disconnect" disabled>切断</button></form>
+<div class="status-grid"><div><small>ブラウザ接続</small><strong id="connection">未接続</strong></div><div><small>あなた</small><strong id="operator">未接続</strong></div><div><small>操作権</small><strong id="owner">未取得</strong></div><div><small>カメラOSC受信</small><strong id="feedback">未確認</strong></div><div><small>位置操作</small><strong id="armStatus">無効</strong></div></div>
+<p id="message" role="status" aria-live="polite">Tailscale HTTPS経由、またはVRChat PCのlocalhostから接続してください。tailnetの許可が本人確認を兼ねるため、トークン入力はありません。</p>
 <div class="actions"><button id="claim" disabled>操作権を取得</button><button id="release" disabled>操作権を返す</button><button id="arm" disabled>受信した位置でARM</button></div>
 </section>
 <div class="columns">
