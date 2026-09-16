@@ -141,11 +141,28 @@ class Engine:
         self.sent = 0
         self.invalid_osc = 0
         self.udp_error = None
+        self.move_at = 0.0
+        self.contact_lost = False
 
     def emit(self, name, values, types):
         # No browser-provided endpoint, host, port, file path or /input controls.
         self.send('/usercamera/' + name, values, types)
         self.sent += 1
+
+    def moving(self):
+        return self.transition is not None or any(self.axes) or any(self.velocity)
+
+    def resync(self):
+        # Pose writes are absolute, so every move restarts from the last position
+        # VRChat reported. Feedback is change-only: silence means "unchanged", not
+        # "unknown", so age is a liveness alarm while moving (see tick), not a gate
+        # on starting. This also picks up a camera moved by hand inside VRChat.
+        if 'Pose' not in self.observed:
+            raise ValueError('No Pose feedback yet; open and move the VRChat camera first')
+        if self.contact_lost:
+            raise ValueError('Lost Pose feedback while moving; check VRChat, then move the camera')
+        self.pose = list(self.observed['Pose'])
+        self.move_at = self.clock()
 
     def stop(self, reason='STOP', *, disarm=True):
         self.axes = [0.0] * 5
@@ -169,6 +186,7 @@ class Engine:
             value = pose_value(values)
             self.observed['Pose'] = value
             self.pose_at = self.clock()
+            self.contact_lost = False
         elif address.startswith('/usercamera/') and address[12:] in SETTINGS:
             name = address[12:]
             if len(values) != 1:
@@ -227,14 +245,15 @@ class Engine:
         elif op == 'arm':
             if not self.enable_pose:
                 raise ValueError('Pose writes disabled: start with --enable-pose-write for rehearsal')
+            # The one explicit handshake: prove the camera is live before taking it.
             if self.pose_at is None or now - self.pose_at > POSE_SECONDS:
                 raise ValueError('No recent Pose feedback; open/move the VRChat camera first')
             if self.observed.get('Mode') == 0:
                 raise ValueError('Open the VRChat camera first')
             if self.observed.get('Lock') or self.observed.get('LookAtMe'):
                 raise ValueError('Disable Camera Lock and Look At Me in VRChat before arming')
+            self.resync()
             self.stop('Armed from observed pose')
-            self.pose = list(self.observed['Pose'])
             self.armed = True
         elif op == 'motion':
             if not self.armed:
@@ -249,6 +268,8 @@ class Engine:
             length = math.sqrt(sum(v * v for v in axes[:3]))
             if length > 1:
                 axes[:3] = [v / length for v in axes[:3]]
+            if any(axes) and not self.moving():
+                self.resync()  # Starting from rest: feedback may have gone quiet.
             self.axes, self.speed, self.turn_speed = axes, speed, turn
             self.input_at = now
             if any(axes):
@@ -275,11 +296,14 @@ class Engine:
             if target is None:
                 raise ValueError('Empty preset')
             duration = number(msg.get('duration', 2.5), 0, 30)
-            # No invented zoom default: interpolation needs an observed value.
-            if 'Zoom' not in self.observed:
-                raise ValueError('Need observed Zoom first')
+            # No invented zoom default: interpolation needs a real starting value.
+            # A CUT lands on the preset's own zoom, so it never has to invent one
+            # (VRChat reports Zoom only when it changes, so it is often unknown).
+            if duration and 'Zoom' not in self.observed:
+                raise ValueError('Need observed Zoom; move its slider in VRChat first')
+            self.resync()
             start = list(self.pose)
-            zoom = self.requested.get('Zoom', self.observed['Zoom'])
+            zoom = self.requested.get('Zoom', self.observed.get('Zoom', target['zoom']))
             self.stop('Preset transition', disarm=False)
             self.transition = (now, duration, start, zoom, target)
         else:
@@ -291,10 +315,13 @@ class Engine:
             self.release(self.owner)
         if not self.armed:
             return
-        # Feedback silence is not proof of disconnection (OSC may be change-only),
-        # but fail closed while moving. Operator can move/re-arm after checking.
-        if self.pose_at is None or now - self.pose_at > POSE_SECONDS:
-            self.stop('Pose feedback stale; check VRChat and re-arm')
+        # VRChat only emits Pose when it changes, so an idle camera always goes
+        # quiet: silence alone never disarms. Once we move, VRChat echoes our own
+        # writes, so continued silence means we lost contact. Measure from the
+        # start of the move, not from the last idle reading.
+        if now - max(self.pose_at or 0.0, self.move_at) > POSE_SECONDS and self.moving():
+            self.contact_lost = True
+            self.stop('Pose feedback stale; check VRChat', disarm=False)
             return
         if dt > 0.2 or dt <= 0:
             self.stop('Control loop stalled; re-arm')

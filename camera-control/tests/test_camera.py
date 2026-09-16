@@ -52,6 +52,10 @@ class EngineTests(unittest.TestCase):
     def tearDown(self): self.temp.cleanup()
     def command(self, **kwargs): self.engine.dispatch('a',kwargs)
     def step(self, dt=1/30): self.now += dt; self.engine.tick(dt)
+    def idle(self, seconds, dt=0.1):
+        # Hold the lease open while no camera feedback arrives at all.
+        for _ in range(int(seconds/dt)):
+            self.now += dt; self.command(op='heartbeat'); self.engine.tick(dt)
 
     def test_start_does_not_move_camera(self): self.assertEqual(self.sent,[])
     def test_mode_and_boolean_typetags(self):
@@ -80,7 +84,7 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(self.engine.armed)
         self.assertEqual(self.engine.axes,[0]*5)
     def test_motion_is_smoothed_and_world_relative(self):
-        self.engine.pose[4] = 90
+        self.engine.receive('/usercamera/Pose',[10,2,20,0,90,0],'ffffff')
         self.command(op='motion',axes=[0,1,0,0,0],speed=1)
         self.step()
         self.assertGreater(self.engine.pose[0],10)
@@ -136,7 +140,7 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.command(op='arm')
     def test_preset_interpolates_shortest_yaw(self):
         self.store.put('default','1',{'name':'stage','pose':[20,2,20,0,-179,0],'zoom':85})
-        self.engine.pose[4]=179
+        self.engine.receive('/usercamera/Pose',[10,2,20,0,179,0],'ffffff')
         self.command(op='recall',slot='1',duration=2)
         self.now += 1; self.engine.tick(1/30)
         self.assertAlmostEqual(self.engine.pose[0],15)
@@ -146,10 +150,45 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(self.sent),count)
     def test_preset_cut(self):
         self.command(op='save',slot='1',name='stage')
-        self.engine.pose[0]=99
+        self.engine.receive('/usercamera/Pose',[99,2,20,0,0,0],'ffffff')
         self.command(op='recall',slot='1',duration=0); self.step()
         self.assertEqual(self.engine.pose[0],10)
         self.assertIsNone(self.engine.transition)
+    def test_cut_recall_without_observed_zoom(self):
+        # VRChat reports Zoom only on change, so a fresh session often lacks it.
+        self.command(op='save',slot='1',name='stage')
+        self.engine.observed.pop('Zoom')
+        with self.assertRaises(ValueError): self.command(op='recall',slot='1',duration=2)
+        self.command(op='recall',slot='1',duration=0); self.step()
+        self.assertEqual(self.engine.pose[:3],[10,2,20])
+        self.assertAlmostEqual(self.engine.requested['Zoom'],45)
+    def test_idle_keeps_arm_and_recall_still_works(self):
+        # VRChat emits Pose only on change, so a still camera always goes quiet.
+        self.command(op='save',slot='1',name='stage')
+        self.engine.receive('/usercamera/Pose',[99,2,20,0,0,0],'ffffff')
+        self.idle(6)
+        self.assertTrue(self.engine.armed)
+        self.command(op='recall',slot='1',duration=0); self.step()
+        self.assertEqual(self.engine.pose[:3],[10,2,20])
+    def test_motion_after_idle_resyncs_to_last_reported_pose(self):
+        self.engine.receive('/usercamera/Pose',[50,2,20,0,90,0],'ffffff')
+        self.idle(6)
+        self.command(op='motion',axes=[0,1,0,0,0],speed=1); self.step()
+        self.assertGreater(self.engine.pose[0],50)
+    def test_stale_feedback_stops_a_held_move_without_disarming(self):
+        for _ in range(60):  # Input held down while VRChat feedback never returns.
+            self.now += 0.1
+            self.command(op='heartbeat')
+            try: self.command(op='motion',axes=[0,1,0,0,0],speed=1)
+            except ValueError: pass
+            self.engine.tick(0.1)
+        self.assertTrue(self.engine.armed)
+        self.assertEqual(self.engine.velocity,[0]*5)
+        self.assertTrue(self.engine.contact_lost)
+        # Lost contact latches: no new move until VRChat reports a position again.
+        with self.assertRaises(ValueError): self.command(op='motion',axes=[0,1,0,0,0],speed=1)
+        self.engine.receive('/usercamera/Pose',[10,2,20,0,0,0],'ffffff')
+        self.command(op='motion',axes=[0,1,0,0,0],speed=1)
     def test_camera_off_disarms(self):
         self.engine.receive('/usercamera/Mode',[0],'i')
         self.assertFalse(self.engine.armed)
