@@ -1,0 +1,179 @@
+# VRChat Camera Control — 独立プロトタイプ
+
+担当者のChrome / Safariから、VRChat PCの**カメラだけ**を操作するWebSocket→OSCブリッジです。StreamCasterのOCI側コントローラー、BLMFシーン切替、`operator-bridge`、OBS操作APIとは別ディレクトリ・別プロセス・別認証です。既存npm workspacesやクラウドデプロイには追加していません。
+
+```text
+担当者のブラウザ（Tailscale接続・アクセス許可済み）
+    │ HTTPS / WebSocket
+    ▼
+VRChat PC: Tailscale Serve :8443
+    │ HTTP / WebSocket（同じPC内）
+    ▼
+VRChat PC: camera-control :8765（127.0.0.1限定）
+    │ UDP OSC → 127.0.0.1:9000
+    │ UDP OSC ← 127.0.0.1:9001
+    ▼
+VRChat User Camera / Drone / Smooth Movement / Spout → 既存OBS
+```
+
+**この画面には映像プレビューはありません。** カメラ担当者には既存OBSなどから別途低遅延の確認映像を渡してください。配信・シーン・音声経路は変更しません。
+
+## 位置操作は1環境でのみ確認済み
+
+2026-09-15に再確認したVRChat公式2025.3.3リリースノートは `/usercamera/Pose` を **Get/Set** と説明していますが、公式Wikiは同じアドレスを **read-only** としています。記載が食い違うため、位置・回転の送信は `--enable-pose-write` を指定した場合だけ有効になる**試験機能**のままです。
+
+2026-09-16、次の1環境で**書き込みが適用されることを確認しました**。Windows 10 / Unity 2022.3.22f2-DWR / デスクトップモード（HMD未接続）。0.15 m/s で2秒間前進を指令し、VRChatが返した位置は指令値と完全一致しました（指令0.2900 m、応答0.2900 m、差分0.0000 m）。エコーの単なるオウム返しではないと言える根拠として、送信前の7分間、受信したPoseはビット単位で不変であり、VRChatの出力が実際のカメラ状態を反映していることを確認しています。
+
+2026-09-18、同じ環境で**停止中のARM維持とプリセットのCUT呼出**も確認しました。ARM後にカメラを止めて30秒放置し、Pose受信が25.16秒途絶えた状態でもARMは維持されました（以前の実装は5秒で解除していました）。その状態からCUTで呼び出すと、カメラは8.120 m離れたプリセット位置へ移動し、VRChatが返した位置・向きは保存値と一致しました（差分0.000 m、yaw 148.3°→6.5°）。開始時に受信Zoomがない状態で、CUTが成功することも同時に確認しています。
+
+**これは1台・1ビルドの結果であり、一般的な互換性の保証ではありません。** 別のビルド、VRモード、将来のアップデートでは挙動が変わり得ます。各環境で映像を見ながら確認してください。
+
+- フラグなし：Mode / Zoom / SmoothMovement / SmoothingStrength / Spout / Lock / LookAtMeの指令送信、受信状態表示、プリセット保存。
+- フラグあり：受信したPoseを基準にARMした後、手動PTZ・プリセットへの位置移動を試せます。
+- **このフラグはVRChat側の制限を解除しません。** 実クライアントがPoseを読み取り専用として扱う場合、位置移動はできません。反映しなければSTOPし、その環境では非対応として扱ってください。
+- OSC受信、UDP送信成功、Web画面の「受付」は指令適用の証明ではありません。受信値と送信値は別表示です。
+
+ワールドやアバターへの追加実装、クライアントMOD、メモリー操作はありません。VRChat側ではOSC有効化、カメラを開く操作、必要に応じてOSC起動オプションを設定します。実機確認前に本番配信へ投入しないでください。
+
+## Windowsで起動する
+
+VRChatと同じWindows PCにPython **3.11以上**を用意してください。Dockerや別VMでは`127.0.0.1`の指す先が異なるため、このプロトタイプはWindowsホスト上で直接動かします。既存Node.jsアプリへの依存追加は不要です。
+
+PowerShellでリポジトリのルートから：
+
+```powershell
+cd camera-control
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe server.py
+```
+
+`http://127.0.0.1:8765` を開いて「接続」を押します。**カメラ専用トークンはありません。** 誰であるかはTailscaleが判定します（次節）。再起動時に操作権や移動を自動復元しません。
+
+位置操作をリハーサルする場合：
+
+```powershell
+.\.venv\Scripts\python.exe server.py --enable-pose-write
+```
+
+VRChatのAction Menuで **OSC → Enabled** を有効化し、カメラを開いて少し動かし、Zoomも操作します。Web側で受信値を確認して「操作権を取得」→「受信した位置でARM」の順に押してください。Lock / Look At MeはVRChat側でもOFFにします。ARM時は5秒以内に受信したPoseが必要なので、カメラを動かした直後に押してください。ARM後は、カメラを止めたまま時間が空いてもプリセット呼出・手動移動を開始できます。
+
+## Tailscaleから委任する
+
+まず `tailscale serve status` で既存設定を確認します。以下ではカメラ専用HTTPSポート **8443** を使います。使用中なら別ポートを選び、URL・許可設定も合わせて変更してください。`vrchat-pc.example-tailnet.ts.net` はVRChat PCの実際のTailscale DNS名に置き換えます。
+
+```powershell
+# VRChat PC: アプリのターミナル
+.\.venv\Scripts\python.exe server.py `
+  --public-origin https://vrchat-pc.example-tailnet.ts.net:8443 `
+  --enable-pose-write
+
+# VRChat PC: 別のターミナル
+ tailscale serve --bg --https=8443 http://127.0.0.1:8765
+ tailscale serve status
+```
+
+担当者は `https://vrchat-pc.example-tailnet.ts.net:8443` を開いて「接続」を押すだけです。**tailnetへの参加許可そのものが本人確認を兼ねます。** `--public-origin` は末尾スラッシュなしの正確なOriginです。環境変数 `CAMERA_PUBLIC_ORIGIN` でも指定できます。未指定のホスト名・Origin・クエリ文字列は拒否します。
+
+Tailscale Serveはtailnet経由のリクエストに `Tailscale-User-Login` などの身元ヘッダを付与し、**Funnel経由には付与しません**。本アプリは `--public-origin` で来た接続にこのヘッダを要求するため、Funnelを誤って有効化しても操作画面には入れません。ヘッダの値は操作者名としてUIに表示され、誰が操作権を持っているかが全員に見えます。
+
+この方式が成り立つのは**バックエンドが `127.0.0.1` のみでlistenしているから**です。外部公開すると誰でもヘッダを詐称できます。VRChat PC上の他のローカルプロセスは依然として詐称可能ですが、そのPCで任意コードを実行できる相手はOBSもVRChatも直接操作できるため、ここだけ守っても意味がありません。localhostのOriginから来た接続は身元ヘッダなしで許可し、操作者名を `localhost` と表示します（VRChat PCでの直接操作）。
+
+Tailscale側でも担当者のユーザー／デバイスから**このPCのTCP 8443だけ**を許可するgrants/ACLを設定してください。アプリがネットワーク許可を自動設定するものではありません。外部tailnetへのデバイス共有を使う場合も共有・アクセス方針を確認してください。**Funnel、一般インターネット公開、ルーターのポート開放、OSCの外部公開は不要です。**
+
+初回Serve利用時はHTTPS有効化確認が必要な場合があります。接続できない場合はServe状態、担当者のTailscale接続、grants/ACL、Originのポートまで一致しているかを確認します。
+
+**誰が操作してよいかはTailscale側のgrants/ACLで決めます。** 本アプリはユーザー単位の許可リストを持たず、tailnetから到達できる利用者を操作可能として扱います。役職別の権限管理は未実装です。操作権を取れるのは同時に一人だけで、他の接続者もSTOPできます。カメラを触らせたくない相手には、このPCのTCP 8443へ到達できないようACLを設定してください。
+
+## 既存operator-bridgeとのポート競合
+
+| 用途 | 既定値 | 公開範囲 |
+|---|---:|---|
+| Webバックエンド | TCP 8765 | 127.0.0.1のみ |
+| Tailscale Serve（上記例） | HTTPS 8443 | 許可したtailnet内 |
+| VRChatへの送信先 | UDP 9000 | 127.0.0.1のみ |
+| VRChatからの受信 | UDP 9001 | 127.0.0.1のみ |
+
+`operator-bridge`も通常9001を受信するため、そのまま同時起動はできません。競合は起動失敗として表示し、勝手に別ポートへ切り替えません。
+
+併用時の明示的な中継案として、VRChatの起動オプションを次にします。
+
+```text
+--osc=9000:127.0.0.1:9002
+```
+
+カメラアプリを以下で起動します。Tailscale利用時は前節の`--public-origin`も付けます。
+
+```powershell
+.\.venv\Scripts\python.exe server.py --feedback-port 9002 --forward-port 9001 --enable-pose-write
+```
+
+```text
+VRChat output :9002 → camera-control → 生のOSCを :9001 に転送 → operator-bridge
+camera-control → VRChat input :9000
+operator-bridge → VRChat input :9000
+```
+
+既存bridgeのコード・OSC仕様は変えません。ただし、**中継構成ではカメラアプリが落ちるとoperator-bridge向け転送も止まります**。別UI・別認証でも受信経路の障害独立はありません。既存シーン切替を優先する本番では、独立OSCルーター等による複数アプリ接続を別途検証するまでカメラ単独でリハーサルしてください。VRChatの出力先を9001へ戻す復旧手順も必要です。
+
+## 操作
+
+- **手動PTZ**：W/A/S/Dで水平移動、E/Qで上下、矢印キーでパン・チルト。画面ボタンは押している間だけ動作します。水平移動はカメラyaw基準、上下はワールド基準です。
+- **ゲームパッド**：標準マッピングのみ。チェックをONにし、RBを押している間に左スティックで移動、右でパン・チルト、LT/RTで上下。ブラウザ・OS別の実機検証は未完了です。
+- **プリセット**：会場IDごとに8枠、最大16会場。OSCで受信した位置とZoomをサーバーの`.data/presets.json`へ保存。上書きは5秒以内に再度保存を押します。呼出はCUTまたは指定秒数の補間です。公式Camera Dollyのファイル再生ではありません。保存には受信Zoomが必要です。呼出側では、CUTは保存済みZoomへそのまま切り替わるため受信Zoomを必要としませんが、秒数指定の補間は開始Zoomが要るためVRChat側でZoomを一度動かしてください。
+
+カメラ制御の計算・送信はサーバー側30Hz、手動入力はブラウザ側20Hzです。開始を平滑化し、キーを離したら入力速度をゼロにします。斜め移動も選択速度以内に正規化します。プリセットは位置・最短角度・Zoomを補間します。壁・衝突・ワールドの移動制限は判定しません。
+
+**ワールド変更前にSTOPし、移動後に会場IDを切り替えてください。** ワールドIDを自動取得しないため、同じ会場IDを別ワールドで使うと無関係な座標へ移動する危険があります。保存データは会場座標を含むためGit対象外です。
+
+## 停止・安全上の境界
+
+手動入力が約0.4秒途絶えると送信を止めます。操作権のheartbeatが約1.5秒途絶える、WebSocket切断、操作権返却、フォーカス喪失・タブ非表示、制御ループの0.2秒超の停止を検知すると移動停止／ARM解除します。受信したMode変更、Lock/LookAtMe有効化でも解除します。
+
+VRChatはPoseを変化時のみ送るため、カメラを止めれば受信は必ず途絶えます。**無受信は「動いていない」という意味であって「位置不明」ではない**ので、停止中は受信が何秒途絶えてもARMを維持します。プリセット呼出や手動移動は、その最後の報告位置へ再同期してから動き出します。VRChat側で手動でカメラを動かした場合も、次の操作開始時に実際の位置へ追従します。
+
+接続喪失の検出は移動中に行います。移動を始めるとVRChatが書き込みをエコーするため、**移動開始から5秒経っても一度も受信がなければ接触喪失と判定して移動を停止し、以後の移動開始を拒否します**（ARMは維持）。VRChatから位置が再び届いた時点で解除されます。ARM時だけは例外で、5秒以内の受信を明示的に要求します。カメラが生きていることを確認してから操作を引き受けるためです。
+
+これらはアプリのタイマー設定であり、実ネットワークやOS停止時の遅延保証ではありません。**STOPは新しい絶対Poseの送信を止めるもので、VRChat内蔵の平滑化の残り、他の操作ツール、OBS配信を強制停止しません。** UDPに受領保証はありません。VRChat側で手動操作できる人と確認映像を残してください。
+
+WebSocketはOrigin/Host制限、公開Originでの身元ヘッダ必須、最大4KBメッセージ、接続数16、毎秒80メッセージ／接続の上限を設けています。遅い閲覧者への状態送信はモーションループから分離しています。ブラウザが任意のOSCアドレス・送信ホスト・ファイルパス・シェルコマンドを指定するAPIはありません。
+
+## テストと検証範囲
+
+```powershell
+.\.venv\Scripts\python.exe -W error::ResourceWarning -m unittest discover -s tests -v
+```
+
+ブラウザテストには開発・CI用の追加依存を使います。サーバー運用には不要です。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install playwright==1.57.0
+.\.venv\Scripts\python.exe -m playwright install chromium
+.\.venv\Scripts\python.exe tests/browser_smoke.py
+.\.venv\Scripts\python.exe tests/ui_offline_smoke.py
+```
+
+`browser_smoke.py`は模擬カメラUDP＋実HTTP/WebSocket＋Chromiumを接続します。`ui_offline_smoke.py`はWebSocketを置き換えたDOM/UI試験です。`CAMERA_TEST_BROWSER_PATH`でChromium実行ファイル、`CAMERA_TEST_SCREENSHOT`で画面保存先を指定できます。オフライン版は`CAMERA_TEST_MOBILE_SCREENSHOT`も使用できます。
+
+**テストコードを追加したことと、成功したことを区別してください。** このREADME自体はテスト成功の証跡ではありません。検証結果は対象コミットのPR ChecksとCIログを確認してください。CIにはPython3.11でのLinux/Windowsテストと、Linux Chromiumの模擬カメラ接続テストを追加しています。依存は`aiohttp==3.14.3`に固定しています。
+
+実VRChat、Safari、実ゲームパッド、Tailscale経由、Spout/OBSの映像・音声、既存operator-bridgeとの実機併用は未検証です。模擬カメラを使ったCI成功でもこれらの実機互換性は証明できません。CIは本コンポーネントだけを対象とし、本番へデプロイしません。
+
+### 本番前の実機チェック
+
+- [ ] Windowsで単独起動し、OSC受信・Mode・Zoom・Spoutを映像で確認する。
+- [ ] Pose送信が実クライアントに反映するか低速・非配信で確認する。非対応なら位置操作は採用しない。
+- [ ] 別の担当者からTailscale HTTPS/WSSで操作し、操作者名が本人のログイン名で表示されることと、未許可デバイスの接続拒否を確認する。
+- [ ] Chrome/Safari、キーボード／タッチ／ゲームパッドの押下・解放・切断を確認する。
+- [ ] 回線断、ブラウザ終了、タブ切替、STOP、操作権取得、VRChat再起動、会場変更を試す。
+- [ ] プリセット保存・再起動後読込・会場取り違え防止を確認する。
+- [ ] 既存bridge併用時は9002→9001中継の停止・復旧をリハーサルする。
+- [ ] 確認映像の遅延、フレーム落ち、Spout/OBSの既存出力維持を確認する。
+
+## 一次資料
+
+- Camera endpoints / ranges: https://docs.vrchat.com/docs/vrchat-202533
+- OSC型・Pose read-onlyの記載: https://wiki.vrchat.com/wiki/OSC
+- OSCのポート・起動オプション: https://docs.vrchat.com/docs/osc-overview
+- Tailscale Serve: https://tailscale.com/docs/reference/tailscale-cli/serve
+- aiohttp: https://docs.aiohttp.org/en/stable/changes.html

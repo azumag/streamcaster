@@ -1,0 +1,2 @@
+# Install in this component's own venv, not in the existing Node workspaces.
+aiohttp==3.14.3
