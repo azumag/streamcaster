@@ -168,6 +168,44 @@ The app remains loopback-only. Tailscale grants must authorize the intended shar
 operators; enabling Serve is a separate network configuration step. Never use Funnel.
 NDI and OBS WebSocket are not published by this option.
 
+## Starting the whole rig at once
+
+`Start-BLMF-Local.ps1` starts both portable OBS instances, the camera control and
+the controller, waits for each to report ready, and stops them again with `-Stop`
+(add `-StopObs` to close OBS too, which is how OBS keeps its configuration: it
+writes on exit, so killing it loses the session's changes). `-NoObs`, `-NoCamera`
+and `-NoBrowser` skip parts; `-Force` stops a camera server left from an earlier
+run. `Start-BLMF-Local.cmd` is the double-clickable wrapper.
+
+It holds no machine paths. Copy `blmf-launcher.example.json` to
+`blmf-launcher.local.json` beside the script and edit it; `-ConfigPath` or
+`BLMF_LAUNCHER_CONFIG` override the location. Only `runtime.root` is required and
+the rest default to the names `Setup.ps1` creates under it. Missing configuration
+stops the launcher rather than guessing a path that exists on one machine. The
+file stays out of git (`*.local.json`), and holds no secrets.
+
+Stopping kills the camera process tree, not just the recorded PID: on Windows the
+venv `python.exe` is a shim that launches the real interpreter as a child, and
+stopping only the shim leaves the ports held and the next start failing.
+
+The launcher reports VRChat's OSC route from what actually arrives, via
+`camera-control/state_probe.py`. VRChat runs under Easy Anti-Cheat so its command
+line cannot be read, and Steam keeps launch options in memory while running, so
+both of the obvious checks can call a correctly configured rig unset. With the
+camera server stopped, `camera-control/osc_probe.py` answers the same question by
+listening on the candidate ports directly.
+
+## Moving an installation
+
+OBS stores media, script and recording locations as absolute paths, so a moved or
+copied runtime home loads no observer script and records to a path that is gone.
+`python relocate.py --home <runtime home>` repairs those, with OBS closed.
+
+It only rewrites values that are actually broken, and only when the replacement is
+unambiguous: a working path is never "corrected", because an operator may have
+pointed it somewhere deliberately. Ambiguous or missing targets are reported for a
+human instead of guessed.
+
 ## Reproduction and upgrade boundary
 
 `npm run blmf:windows:test` includes a fresh temporary installation and actual HTTP

@@ -1,1 +1,4 @@
 * text eol=lf
+# cmd.exe is safest with CRLF, and PowerShell does not care.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

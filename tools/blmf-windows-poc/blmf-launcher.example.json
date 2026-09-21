@@ -1,0 +1,21 @@
+{
+  "_comment": "Copy to blmf-launcher.local.json and edit for this machine. Paths may use %USERPROFILE% and are absolute once expanded. Under runtime, only root is required: the rest default to the names Setup.ps1 creates under it.",
+  "runtime": {
+    "root": "%USERPROFILE%\\projects\\blmf-broadcast\\outputs",
+    "mainObs": null,
+    "subObs": null,
+    "controller": null,
+    "nodeModulesRoot": null,
+    "mainWebSocketPort": 4456,
+    "controllerPort": 18765
+  },
+  "cameraControl": {
+    "enabled": true,
+    "path": "%USERPROFILE%\\projects\\streamcaster\\camera-control",
+    "uiPort": 8765,
+    "feedbackPort": 9002,
+    "forwardPort": 9001,
+    "oscPort": 9000,
+    "enablePoseWrite": true
+  }
+}
