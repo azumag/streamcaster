@@ -109,6 +109,26 @@ class EngineTests(unittest.TestCase):
     def test_stalled_loop_disarms(self):
         self.command(op='motion',axes=[1,0,0,0,0]); self.step(0.3)
         self.assertFalse(self.engine.armed); self.assertFalse(self.sent)
+    def test_stalled_loop_while_still_keeps_arm(self):
+        # A hiccup cannot invalidate a position nothing was moving.
+        self.step(0.3)
+        self.assertTrue(self.engine.armed)
+    def test_idle_does_not_overwrite_the_reason(self):
+        self.engine.reason='Pose feedback stale; check VRChat'
+        self.idle(1)
+        self.assertEqual(self.engine.reason,'Pose feedback stale; check VRChat')
+    def test_lost_contact_is_reported_to_the_operator(self):
+        self.assertFalse(self.engine.state()['contactLost'])
+        for _ in range(60):  # Input held while VRChat never echoes back.
+            self.now += 0.1
+            self.command(op='heartbeat')
+            try: self.command(op='motion',axes=[0,1,0,0,0],speed=1)
+            except ValueError: pass
+            self.engine.tick(0.1)
+        self.assertTrue(self.engine.state()['contactLost'])
+        self.assertIn('stale',self.engine.reason)
+        self.engine.receive('/usercamera/Pose',[10,2,20,0,0,0],'ffffff')
+        self.assertFalse(self.engine.state()['contactLost'])
     def test_stale_pose_cannot_arm(self):
         self.now += 6; self.engine.dispatch('a',{'op':'claim'})
         with self.assertRaises(ValueError): self.command(op='arm')

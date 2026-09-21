@@ -324,7 +324,10 @@ class Engine:
             self.stop('Pose feedback stale; check VRChat', disarm=False)
             return
         if dt > 0.2 or dt <= 0:
-            self.stop('Control loop stalled; re-arm')
+            # A hiccup only invalidates motion that was integrating over it.
+            # A still camera is exactly where it was, so stay armed.
+            if self.moving():
+                self.stop('Control loop stalled; re-arm')
             return
         if self.transition:
             started, duration, start, start_zoom, target = self.transition
@@ -340,7 +343,10 @@ class Engine:
                 self.transition = None
             return
         if now - self.input_at > INPUT_SECONDS:
-            self.stop('Input timeout', disarm=False)
+            # Only a live move times out. Repeating this while already still
+            # would overwrite the reason the operator needs to read.
+            if self.moving():
+                self.stop('Input timeout', disarm=False)
             return
         alpha = 1 - math.exp(-dt / 0.12)
         targets = [v * (self.speed if i < 3 else self.turn_speed) for i, v in enumerate(self.axes)]
@@ -368,6 +374,7 @@ class Engine:
             'oscAge': None if self.last_osc_at is None else round(now - self.last_osc_at, 2),
             'poseAge': None if self.pose_at is None else round(now - self.pose_at, 2),
             'reason': self.reason, 'sent': self.sent, 'invalidOsc': self.invalid_osc,
+            'contactLost': self.contact_lost,
             'udpError': self.udp_error,
             'presets': self.presets.data.get(self.profile, {}),
         }

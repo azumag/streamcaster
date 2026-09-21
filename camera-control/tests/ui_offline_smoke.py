@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]/'public'
 FAKE=r'''
 window.cameraTest={messages:[]};
-const fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,udpError:null,presets:{}};
+const fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,udpError:null,presets:{}};
 window.WebSocket=class extends EventTarget {
  static OPEN=1;
  constructor(){super();this.readyState=1;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
