@@ -12,6 +12,7 @@ from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType, web
 from engine import Engine, Presets, angle_lerp
 from osc_codec import encode, decode
 from osc_probe import summarize, watch
+from state_probe import verdict
 from urllib.parse import urlsplit
 from server import Config, ENGINE, Feedback, create_app, parse_message, response_headers
 
@@ -401,6 +402,23 @@ class OscProbeTests(unittest.TestCase):
     def test_watch_counts_real_datagrams(self):
         seen=asyncio.run(self._watch_once())
         self.assertEqual((seen['packets'],seen['camera'],seen['undecodable']),(2,1,1))
+
+
+class StateProbeTests(unittest.TestCase):
+    def test_no_traffic_names_the_launch_option(self):
+        good,line=verdict({'anyOscAge':None,'oscAge':None},9002)
+        self.assertFalse(good)
+        self.assertIn('--osc=9000:127.0.0.1:9002',line)
+    def test_traffic_without_camera_values_says_to_open_the_camera(self):
+        good,line=verdict({'anyOscAge':0.2,'oscAge':None},9002)
+        self.assertTrue(good)
+        self.assertIn('open the VRChat camera',line)
+    def test_camera_values_report_their_age(self):
+        good,line=verdict({'anyOscAge':0.1,'oscAge':0.5},9002)
+        self.assertTrue(good)
+        self.assertIn('0.5s ago',line)
+    def test_a_silent_server_is_not_good_news(self):
+        self.assertEqual(verdict(None,9002)[0],False)
 
 
 class ConfigTests(unittest.TestCase):

@@ -228,40 +228,18 @@ if ($existing -and $existing.service -eq 'blmf-manual-osc') {
     return
 }
 
-# VRChat の起動オプションを確認する。
-# 起動中の VRChat のコマンドラインが最も確実。Steam は起動中 localconfig.vdf を
-# 書き出さないことがあるため、ファイルだけ見ると未設定に見える。
-function Test-VrchatOscOption {
-    $expected = "--osc=$($cam.oscPort):127.0.0.1:$($cam.feedbackPort)"
-    $vrchat = Get-CimInstance Win32_Process -Filter "Name='VRChat.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($vrchat) {
-        # VRChat は EAC 下でコマンドラインを読めないことがある。空文字を「未設定」と誤判定しない。
-        if ([string]::IsNullOrWhiteSpace($vrchat.CommandLine)) {
-            return [pscustomobject]@{ Configured = $false; Value = ''; Expected = $expected; Source = 'running-unreadable' }
-        }
-        return [pscustomobject]@{
-            Configured = ($vrchat.CommandLine -like "*$expected*")
-            Value      = $vrchat.CommandLine
-            Expected   = $expected
-            Source     = 'running'
-        }
-    }
-    $steamPath = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue).SteamPath
-    if (-not $steamPath) { return $null }
-    foreach ($dir in (Get-ChildItem (Join-Path $steamPath 'userdata') -Directory -ErrorAction SilentlyContinue)) {
-        $vdf = Join-Path $dir.FullName 'config\localconfig.vdf'
-        if (-not (Test-Path $vdf)) { continue }
-        $text = Get-Content $vdf -Raw -Encoding UTF8
-        $index = $text.IndexOf('"438100"')
-        if ($index -lt 0) { continue }
-        $segment = $text.Substring($index, [Math]::Min(700, $text.Length - $index))
-        $match = [regex]::Match($segment, '"LaunchOptions"\s+"([^"]*)"')
-        if ($match.Success -and $match.Groups[1].Value -like "*--osc=*") {
-            return [pscustomobject]@{ Configured = ($match.Groups[1].Value -like "*$expected*"); Value = $match.Groups[1].Value; Expected = $expected; Source = 'steam-config' }
-        }
-        return [pscustomobject]@{ Configured = $false; Value = ''; Expected = $expected; Source = 'steam-config' }
-    }
-    return $null
+# VRChat の OSC 送信先は受信で確かめる。
+# VRChat は Easy Anti-Cheat 下でコマンドラインを読めず、Steam は起動中
+# localconfig.vdf を書き出さないので、どちらを見ても「未設定」に見えることがある。
+# 実際にこのセッションで、正しく設定済みの環境を未設定と誤判定した。
+# カメラサーバーが受信ポートを握っているため、判定はサーバーの状態から読む。
+function Test-VrchatOscTraffic {
+    $python = Join-Path $CamRoot '.venv\Scripts\python.exe'
+    $probe  = Join-Path $CamRoot 'state_probe.py'
+    if (-not (Test-Path $python) -or -not (Test-Path $probe)) { return $null }
+    $line = & $python $probe --url "http://127.0.0.1:$($cam.uiPort)" `
+        --feedback-port $cam.feedbackPort --seconds 2 2>&1 | Select-Object -Last 1
+    return [pscustomobject]@{ Receiving = ($LASTEXITCODE -eq 0); Line = [string]$line }
 }
 
 # ---------------------------------------------------------------- カメラコントロール
@@ -467,23 +445,16 @@ if (-not $state.subConnected)  { Write-Warn2 'Sub OBS 未接続 (Sub OBS と lua
 # ---------------------------------------------------------------- VRChat 側の確認
 
 if ($cameraOn) {
-    $vrchat = Test-VrchatOscOption
-    if ($null -eq $vrchat) {
-        Write-Warn2 'Steam の設定を確認できませんでした。VRChat の起動オプションを手動で確認してください。'
-    } elseif ($vrchat.Configured) {
-        if ($vrchat.Source -eq 'running') { Write-Ok "VRChat は OSC 中継構成で起動中です ($($vrchat.Expected))" }
-        else { Write-Ok "VRChat 起動オプション設定済み: $($vrchat.Value)" }
-    } elseif ($vrchat.Source -eq 'running-unreadable') {
-        Write-Info "VRChat は起動中 (OSC 指定は EAC のため判定不能)。想定値: $($vrchat.Expected)"
-        Write-Info '実際の経路を確かめるなら、カメラ UI で ARM が通るかを見てください。'
-    } elseif ($vrchat.Source -eq 'running') {
-        Write-Warn2 '起動中の VRChat に OSC 指定がありません。VRChat を再起動すると設定が反映されます。'
-        Write-Info "    $($vrchat.Expected)"
+    $traffic = Test-VrchatOscTraffic
+    if ($null -eq $traffic) {
+        Write-Warn2 'state_probe.py が見つからず、OSC 受信を確認できませんでした。'
+    } elseif ($traffic.Receiving) {
+        Write-Ok $traffic.Line
     } else {
-        Write-Warn2 'VRChat の起動オプションを確認できませんでした (Steam 起動中は設定がファイルに未反映のことがあります)。'
-        Write-Info 'Steam > VRChat > プロパティ > 起動オプション に次が入っていれば OK:'
-        Write-Info "    $($vrchat.Expected)"
-        Write-Info 'VRChat 起動後にこのランチャーを実行すると、実際のコマンドラインで判定します。'
+        Write-Warn2 $traffic.Line
+        Write-Info 'VRChat 未起動ならこれで正常です。起動済みなら Action Menu の OSC と、'
+        Write-Info "Steam > VRChat > プロパティ > 起動オプションの --osc=$($cam.oscPort):127.0.0.1:$($cam.feedbackPort) を確認してください。"
+        Write-Info 'カメラを動かしてから、このランチャーをもう一度実行すると再判定します。'
     }
 }
 
