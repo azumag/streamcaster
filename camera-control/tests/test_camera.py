@@ -139,6 +139,13 @@ class EngineTests(unittest.TestCase):
         last=self.engine.last_osc_at; self.now += 1
         self.engine.receive('/avatar/parameters/Foo',[1],'i')
         self.assertEqual(self.engine.last_osc_at,last)
+    def test_unrelated_osc_still_proves_vrchat_is_sending(self):
+        # "OSC is off or aimed elsewhere" must not look like "the camera is still".
+        engine=Engine(lambda *a:None,self.store,enable_pose=True,clock=lambda:self.now)
+        self.assertIsNone(engine.state()['anyOscAge'])
+        engine.receive('/avatar/parameters/Foo',[1],'i')
+        self.assertEqual(engine.state()['anyOscAge'],0)
+        self.assertIsNone(engine.state()['oscAge'])
     def test_requested_is_not_observed(self):
         self.command(op='set',name='Zoom',value=80)
         self.assertEqual(self.engine.observed['Zoom'],45)
@@ -382,12 +389,24 @@ class ConfigTests(unittest.TestCase):
         self.assertIn('wss://camera.example.ts.net:8443',csp)
         self.assertIn('ws://127.0.0.1:8765',csp)
         self.assertNotIn('wss:;',csp)
+    def test_packets_this_codec_rejects_still_count_as_vrchat_traffic(self):
+        # VRChat announces avatars with a string arg this codec does not accept.
+        class Transport:
+            def sendto(self,data,addr): pass
+        with tempfile.TemporaryDirectory() as temp:
+            engine=Engine(lambda *a:None,Presets(Path(temp)/'p.json'))
+            receiver=Feedback(engine,Config(feedback_port=9002)); receiver.connection_made(Transport())
+            receiver.datagram_received(b'/avatar/change\0\0,s\0\0avtr_example\0\0\0\0',('127.0.0.1',9000))
+            self.assertEqual(engine.invalid_osc,1)
+            self.assertIsNotNone(engine.any_osc_at)
+            self.assertIsNone(engine.last_osc_at)
     def test_forwarding_preserves_original_payload(self):
         sent=[]
         class Transport:
             def sendto(self,data,addr): sent.append((data,addr))
         class FakeEngine:
             invalid_osc=0
+            def note_traffic(self): pass
             def receive(self,*args): pass
         config=Config(feedback_port=9002,forward_port=9001)
         receiver=Feedback(FakeEngine(),config); receiver.connection_made(Transport())

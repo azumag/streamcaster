@@ -127,6 +127,7 @@ class Engine:
         self.input_at = 0.0
         self.pose_at = None
         self.last_osc_at = None
+        self.any_osc_at = None
         self.observed = {}
         self.requested = {}
         self.observed_at = {}
@@ -194,7 +195,17 @@ class Engine:
             self.stop('Operator released / disconnected')
             self.owner = None
 
+    def note_traffic(self):
+        """Something arrived from VRChat. Says the OSC path works, nothing more.
+
+        Camera health still comes from /usercamera/ only, but without this an
+        operator cannot tell "OSC is off or aimed elsewhere" from "the camera is
+        simply sitting still", which look identical and need opposite fixes.
+        """
+        self.any_osc_at = self.clock()
+
     def receive(self, address, values, types):
+        self.note_traffic()
         if address == '/usercamera/Pose':
             if types != 'ffffff':
                 raise ValueError('Unexpected Pose typetag')
@@ -392,6 +403,7 @@ class Engine:
             'observed': self.observed, 'requested': self.requested,
             'commandedPose': self.pose, 'transitioning': self.transition is not None,
             'oscAge': None if self.last_osc_at is None else round(now - self.last_osc_at, 2),
+            'anyOscAge': None if self.any_osc_at is None else round(now - self.any_osc_at, 2),
             'poseAge': None if self.pose_at is None else round(now - self.pose_at, 2),
             'reason': self.reason, 'sent': self.sent, 'invalidOsc': self.invalid_osc,
             'contactLost': self.contact_lost,

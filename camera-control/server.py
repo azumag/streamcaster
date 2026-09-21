@@ -110,6 +110,8 @@ class Feedback(asyncio.DatagramProtocol):
         if self.config.forward_port:
             # Optional explicit fan-out; the existing operator bridge is unchanged.
             self.transport.sendto(data, ('127.0.0.1', self.config.forward_port))
+        # Even a packet this codec rejects proves VRChat is sending to this port.
+        self.engine.note_traffic()
         try:
             self.engine.receive(*decode(data))
         except (ValueError, UnicodeError):

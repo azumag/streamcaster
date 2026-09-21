@@ -27,8 +27,11 @@ function render(s) {
   if (!s.armed || !own()) { keys.clear(); pointers.clear(); wasMoving = false; }
   $('owner').textContent = own() ? 'あなたが操作中'
     : s.owner ? `${s.ownerName || '別の担当者'}が操作中` : '空き';
+  // Three different situations that all used to read as「未受信」.
   $('feedback').textContent = s.contactLost ? '接触喪失（カメラを動かすと復帰）'
-    : s.oscAge === null ? '未受信' : `${s.oscAge.toFixed(1)}秒前`;
+    : s.oscAge !== null ? `${s.oscAge.toFixed(1)}秒前`
+    : s.anyOscAge === null ? 'VRChatから受信なし（OSC設定と送信先ポートを確認）'
+    : 'カメラ値のみ未受信（カメラを開いて動かす）';
   $('armStatus').textContent = s.armed ? (s.transitioning ? 'プリセット移動中' : 'ARM済み') : '停止 / 未ARM';
   $('poseWarning').textContent = s.poseWriteEnabled ? 'Pose書き込み試験モード。OSC受信は書き込み対応の証明ではありません。映像を見ながら少量ずつ確認してください。' : '位置操作は無効です。実機リハーサル時に --enable-pose-write で起動してください。';
   $('observed').textContent = JSON.stringify(s.observed, null, 2);
