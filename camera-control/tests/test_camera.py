@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType, web
 from engine import Engine, Presets, angle_lerp
 from osc_codec import encode, decode
+from urllib.parse import urlsplit
 from server import Config, ENGINE, Feedback, create_app, parse_message, response_headers
 
 PUBLIC = 'https://camera.example.ts.net:8443'
@@ -221,22 +222,31 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         self.udp.bind(('127.0.0.1',0)); self.udp.setblocking(False)
-        port=free_port(); feedback=free_port(socket.SOCK_DGRAM)
+        port=free_port(); remote=free_port(); feedback=free_port(socket.SOCK_DGRAM)
         self.config=Config(port=port,feedback_port=feedback,osc_port=self.udp.getsockname()[1],
-                           public_origin=PUBLIC,enable_pose=True,
+                           public_origin=PUBLIC,remote_port=remote,enable_pose=True,
                            presets=Path(self.temp.name)/'presets.json')
         self.app=create_app(self.config); self.runner=web.AppRunner(self.app)
-        await self.runner.setup(); await web.TCPSite(self.runner,'127.0.0.1',port).start()
+        await self.runner.setup()
+        for bind in (port,remote): await web.TCPSite(self.runner,'127.0.0.1',bind).start()
         self.url=f'http://127.0.0.1:{port}'
+        self.remote_url=f'http://127.0.0.1:{remote}'  # What Tailscale Serve forwards to.
         self.session=ClientSession(); self.sockets=[]
     async def asyncTearDown(self):
         await asyncio.gather(*(ws.close() for ws in self.sockets)); await self.session.close(); await self.runner.cleanup(); self.udp.close(); self.temp.cleanup()
-    async def connect(self,origin=None,login=None):
-        headers={'Tailscale-User-Login':login} if login else None
-        ws=await self.session.ws_connect(self.url+'/ws',origin=origin or self.url,headers=headers)
+    async def connect(self,origin=None,login=None,url=None,host=None):
+        headers={}
+        if login: headers['Tailscale-User-Login']=login
+        if host: headers['Host']=host
+        base=url or self.url
+        ws=await self.session.ws_connect(base+'/ws',origin=origin or base,headers=headers or None)
         self.sockets.append(ws)
         self.assertEqual((await ws.receive_json())['type'],'authenticated')
         return ws
+    async def remote(self,**kwargs):
+        # Arrives on the Serve port, so it carries the published Origin and Host.
+        kwargs.setdefault('origin',PUBLIC); kwargs.setdefault('host',urlsplit(PUBLIC).netloc)
+        return await self.connect(url=self.remote_url,**kwargs)
     async def until(self,ws,kind):
         async with asyncio.timeout(2):
             while True:
@@ -253,19 +263,37 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         async with self.session.get(self.url+'/',headers={'Host':'evil.test'}) as response: self.assertEqual(response.status,403)
         with self.assertRaises(WSServerHandshakeError): await self.connect(origin='https://evil.test')
         with self.assertRaises(WSServerHandshakeError): await self.session.ws_connect(self.url+'/ws')
-    async def test_published_origin_requires_tailscale_identity(self):
+    async def test_serve_port_requires_tailscale_identity(self):
         # Serve adds the header for tailnet traffic and omits it for Funnel.
         with self.assertRaises(WSServerHandshakeError):
-            await self.session.ws_connect(self.url+'/ws',origin=PUBLIC)
-        ws=await self.connect(origin=PUBLIC,login='alice@example.com')
+            await self.session.ws_connect(self.remote_url+'/ws',origin=PUBLIC)
+        ws=await self.remote(login='alice@example.com')
         self.assertEqual((await self.until(ws,'state'))['operator'],'alice@example.com')
-    async def test_loopback_origin_is_physical_access(self):
+    async def test_forged_origin_cannot_pose_as_local_access(self):
+        # A non-browser client sets Origin freely, so it must not decide the gate.
+        for origin in (self.url,f'http://localhost:{self.config.port}'):
+            with self.assertRaises(WSServerHandshakeError):
+                await self.session.ws_connect(self.remote_url+'/ws',origin=origin)
+            with self.assertRaises(WSServerHandshakeError):
+                await self.session.ws_connect(self.remote_url+'/ws',origin=origin,
+                                              headers={'Host':urlsplit(PUBLIC).netloc})
+    async def test_serve_port_rejects_loopback_host_and_local_port_rejects_published(self):
+        with self.assertRaises(WSServerHandshakeError):
+            await self.session.ws_connect(self.remote_url+'/ws',origin=PUBLIC,
+                                          headers={'Host':f'127.0.0.1:{self.config.port}',
+                                                   'Tailscale-User-Login':'alice@example.com'})
+        with self.assertRaises(WSServerHandshakeError):
+            await self.connect(origin=PUBLIC,login='alice@example.com')
+    async def test_local_port_is_physical_access(self):
         ws=await self.connect()
         self.assertEqual((await self.until(ws,'state'))['operator'],'localhost')
+    async def test_local_port_ignores_forged_identity_header(self):
+        ws=await self.connect(login='boss@example.com')
+        self.assertEqual((await self.until(ws,'state'))['operator'],'localhost')
     async def test_owner_is_named_for_other_operators(self):
-        alice=await self.connect(origin=PUBLIC,login='alice@example.com')
+        alice=await self.remote(login='alice@example.com')
         await alice.send_json({'op':'claim'}); await self.until(alice,'accepted')
-        bob=await self.connect(origin=PUBLIC,login='bob@example.com')
+        bob=await self.remote(login='bob@example.com')
         self.assertEqual((await self.until(bob,'state'))['ownerName'],'alice@example.com')
     async def test_authenticated_websocket_to_udp(self):
         ws=await self.connect(); await ws.send_json({'op':'claim'}); await self.until(ws,'accepted')
@@ -305,14 +333,17 @@ class ConfigTests(unittest.TestCase):
     def test_config_guards(self):
         for args in ({'port':0},{'osc_port':9001},{'forward_port':9000},
                      {'public_origin':'http://camera.ts.net'},{'public_origin':'https://camera.ts.net/'},
-                     {'public_origin':'https://user:pass@camera.ts.net'}):
+                     {'public_origin':'https://user:pass@camera.ts.net'},
+                     {'public_origin':PUBLIC},                      # publishing without a Serve port
+                     {'remote_port':8766},                          # Serve port without publishing
+                     {'public_origin':PUBLIC,'remote_port':8765}):  # Serve port equal to the local one
             with self.subTest(args=args), self.assertRaises(ValueError): Config(**args)
     def test_explicit_public_origin(self):
-        config=Config(public_origin='https://camera.example.ts.net:8443')
+        config=Config(public_origin=PUBLIC,remote_port=8766)
         self.assertIn('https://camera.example.ts.net:8443',config.origins)
         self.assertIn('camera.example.ts.net:8443',config.hosts)
     def test_csp_has_exact_websocket_origins(self):
-        config=Config(public_origin='https://camera.example.ts.net:8443')
+        config=Config(public_origin=PUBLIC,remote_port=8766)
         csp=response_headers(config)['Content-Security-Policy']
         self.assertIn('wss://camera.example.ts.net:8443',csp)
         self.assertIn('ws://127.0.0.1:8765',csp)

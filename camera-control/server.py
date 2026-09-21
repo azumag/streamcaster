@@ -37,6 +37,7 @@ class Config:
     osc_port: int = 9000
     forward_port: int | None = None
     public_origin: str | None = None
+    remote_port: int | None = None
     enable_pose: bool = False
     presets: Path = ROOT / '.data' / 'presets.json'
 
@@ -44,6 +45,18 @@ class Config:
         for value in (self.port, self.feedback_port, self.osc_port):
             if type(value) is not int or not 1 <= value <= 65535:
                 raise ValueError('Ports must be integers in 1-65535')
+        # Remote access gets its own loopback port so "did this arrive through
+        # Tailscale Serve?" is answered by the listening socket, which a client
+        # cannot forge, instead of by a header it fully controls.
+        if self.public_origin and self.remote_port is None:
+            raise ValueError('Publishing needs --remote-port: the separate port Tailscale Serve forwards to')
+        if self.remote_port is not None:
+            if type(self.remote_port) is not int or not 1 <= self.remote_port <= 65535:
+                raise ValueError('Ports must be integers in 1-65535')
+            if self.remote_port == self.port:
+                raise ValueError('Remote port must differ from the local UI port')
+            if not self.public_origin:
+                raise ValueError('--remote-port needs --public-origin')
         if self.feedback_port == self.osc_port:
             raise ValueError('OSC input and output ports must differ')
         if self.forward_port is not None:
@@ -59,20 +72,27 @@ class Config:
             _ = origin.port  # Validate malformed/out-of-range ports as well.
 
     @property
+    def local_origins(self):
+        return {f'http://127.0.0.1:{self.port}', f'http://localhost:{self.port}'}
+
+    @property
     def origins(self):
-        return {f'http://127.0.0.1:{self.port}', f'http://localhost:{self.port}'} | (
-            {self.public_origin} if self.public_origin else set())
+        return self.local_origins | ({self.public_origin} if self.public_origin else set())
+
+    def origins_for(self, arrived_on):
+        """Only the published origin may talk to the Serve port, and vice versa."""
+        return {self.public_origin} if arrived_on == self.remote_port else self.local_origins
 
     @property
     def hosts(self):
         return {urlsplit(origin).netloc for origin in self.origins}
 
 
-def response_headers(config):
+def response_headers(config, origins=None):
     # Explicit WS schemes also work in browsers that do not map connect-src
     # 'self' from HTTPS to WSS. Only configured, exact origins are permitted.
     sources = ' '.join(sorted(origin.replace('https://', 'wss://').replace('http://', 'ws://')
-                              for origin in config.origins))
+                              for origin in (config.origins if origins is None else origins)))
     return {**HEADERS, 'Content-Security-Policy': HEADERS['Content-Security-Policy'].replace(
         "connect-src 'self'", "connect-src 'self' " + sources)}
 
@@ -113,20 +133,24 @@ def parse_message(raw):
 
 @web.middleware
 async def guard(request, handler):
-    if request.host not in request.app[CONFIG].hosts:
+    config = request.app[CONFIG]
+    origins = config.origins_for(arrived_on(request))
+    if request.host not in {urlsplit(origin).netloc for origin in origins}:
         raise web.HTTPForbidden(text='Host not allowed')
     # No credentials in URLs; no generic file serving or write HTTP APIs.
     if request.query_string:
         raise web.HTTPBadRequest(text='Query strings are not accepted')
     response = await handler(request)
     if not response.prepared:
-        response.headers.update(response_headers(request.app[CONFIG]))
+        response.headers.update(response_headers(config, origins))
     return response
 
 
 async def static_file(request):
     names = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css'}
-    return web.FileResponse(ROOT / 'public' / names[request.path], headers=response_headers(request.app[CONFIG]))
+    config = request.app[CONFIG]
+    return web.FileResponse(ROOT / 'public' / names[request.path],
+                            headers=response_headers(config, config.origins_for(arrived_on(request))))
 
 
 async def health(request):
@@ -134,37 +158,44 @@ async def health(request):
     return web.json_response({'service': 'streamcaster-camera-control', 'http': 'ready'})
 
 
-def operator_label(request, config):
-    """Who is asking, per Tailscale Serve, or None when nothing vouches for them.
+def arrived_on(request):
+    """Which of our listening ports accepted this connection. Clients cannot forge it."""
+    socket_name = request.transport.get_extra_info('sockname') if request.transport else None
+    return socket_name[1] if socket_name else None
 
-    Serve adds identity headers to tailnet traffic and omits them for Funnel, so
-    demanding one on the published origin keeps the public internet out even if
-    Funnel is switched on by mistake. The loopback origins are physical access to
-    the VRChat PC itself. Headers are only trustworthy because this process binds
-    to 127.0.0.1: any other local process could forge them.
+
+def operator_label(request, config):
+    """Who is asking, or None when nothing vouches for them.
+
+    The Serve port is reachable only through Tailscale Serve, which adds identity
+    headers for tailnet traffic and omits them for Funnel, so requiring one there
+    keeps the public internet out even if Funnel is switched on by mistake. The
+    local port is physical access to the VRChat PC itself and needs no header.
+
+    Deciding by listening port matters: a header or Origin can be set freely by
+    any non-browser client, so those cannot say where a request came from.
     """
-    origin = request.headers.get('Origin')
+    if arrived_on(request) != config.remote_port:
+        return 'localhost'
     login = request.headers.get('Tailscale-User-Login', '')
-    if not isinstance(login, str) or len(login) > 254 or '\n' in login or '\r' in login:
+    if not isinstance(login, str) or not login or len(login) > 254 or '\n' in login or '\r' in login:
         return None
-    if origin == config.public_origin:
-        return login or None
-    return login or 'localhost'
+    return login
 
 
 async def websocket(request):
     config, engine = request.app[CONFIG], request.app[ENGINE]
-    if request.headers.get('Origin') not in config.origins:
+    if request.headers.get('Origin') not in config.origins_for(arrived_on(request)):
         raise web.HTTPForbidden(text='Origin not allowed')
     operator = operator_label(request, config)
     if operator is None:
-        # No tailnet identity on the published origin: Funnel or a bare proxy.
+        # Reached the Serve port without a tailnet identity: Funnel or a bare proxy.
         raise web.HTTPForbidden(text='Tailscale identity required')
     clients = request.app[CLIENTS]
     if len(clients) >= 16:
         raise web.HTTPServiceUnavailable(text='Connection limit')
     ws = web.WebSocketResponse(max_msg_size=4096, heartbeat=10, compress=False)
-    ws.headers.update(response_headers(config))
+    ws.headers.update(response_headers(config, config.origins_for(arrived_on(request))))
     # Reserve before awaiting upgrade to make the connection limit race-free.
     clients.add(ws)
     client, publisher = secrets.token_hex(8), None
@@ -290,6 +321,22 @@ def create_app(config):
     return app
 
 
+def run_sites(app, ports):
+    """Serve the same app on several loopback ports until interrupted."""
+    async def serve():
+        runner = web.AppRunner(app, access_log=None)
+        await runner.setup()
+        for port in ports:
+            await web.TCPSite(runner, '127.0.0.1', port, shutdown_timeout=3).start()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await runner.cleanup()
+
+    with suppress(KeyboardInterrupt):
+        asyncio.run(serve())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8765)
@@ -297,22 +344,25 @@ def main():
     parser.add_argument('--osc-port', type=int, default=9000)
     parser.add_argument('--forward-port', type=int)
     parser.add_argument('--public-origin', default=os.environ.get('CAMERA_PUBLIC_ORIGIN'))
+    parser.add_argument('--remote-port', type=int,
+                        help='Separate loopback port for Tailscale Serve to forward to')
     parser.add_argument('--enable-pose-write', action='store_true')
     parser.add_argument('--presets', type=Path, default=ROOT / '.data' / 'presets.json')
     args = parser.parse_args()
     try:
         config = Config(port=args.port, feedback_port=args.feedback_port,
                         osc_port=args.osc_port, forward_port=args.forward_port,
-                        public_origin=args.public_origin, enable_pose=args.enable_pose_write,
-                        presets=args.presets)
+                        public_origin=args.public_origin, remote_port=args.remote_port,
+                        enable_pose=args.enable_pose_write, presets=args.presets)
         app = create_app(config)
         print(f'Camera UI: http://127.0.0.1:{config.port}', flush=True)
-        print('Remote access: ' + (f'{config.public_origin} (Tailscale identity required)'
-                                   if config.public_origin else 'localhost only'), flush=True)
+        print('Remote access: ' + (
+            f'{config.public_origin} -> 127.0.0.1:{config.remote_port} (Tailscale identity required)'
+            if config.public_origin else 'localhost only'), flush=True)
         print(f'OSC feedback: 127.0.0.1:{config.feedback_port}; send: 127.0.0.1:{config.osc_port}', flush=True)
         print('Pose writes: EXPERIMENTAL ENABLED' if config.enable_pose else 'Pose writes: disabled', flush=True)
-        web.run_app(app, host='127.0.0.1', port=config.port, access_log=None,
-                    print=None, shutdown_timeout=3)
+        ports = [config.port] + ([config.remote_port] if config.remote_port else [])
+        run_sites(app, ports)
     except (ValueError, OSError) as exc:
         parser.exit(1, f'Camera server could not start: {exc}\nCheck port conflicts and configuration.\n')
 

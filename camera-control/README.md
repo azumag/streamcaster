@@ -7,9 +7,10 @@
     │ HTTPS / WebSocket
     ▼
 VRChat PC: Tailscale Serve :8443
-    │ HTTP / WebSocket（同じPC内）
+    │ HTTP / WebSocket（同じPC内、身元ヘッダ付き）
     ▼
-VRChat PC: camera-control :8765（127.0.0.1限定）
+VRChat PC: camera-control :8766（遠隔用・身元ヘッダ必須）
+                          :8765（手元用・127.0.0.1限定）
     │ UDP OSC → 127.0.0.1:9000
     │ UDP OSC ← 127.0.0.1:9001
     ▼
@@ -66,18 +67,23 @@ VRChatのAction Menuで **OSC → Enabled** を有効化し、カメラを開い
 # VRChat PC: アプリのターミナル
 .\.venv\Scripts\python.exe server.py `
   --public-origin https://vrchat-pc.example-tailnet.ts.net:8443 `
+  --remote-port 8766 `
   --enable-pose-write
 
-# VRChat PC: 別のターミナル
- tailscale serve --bg --https=8443 http://127.0.0.1:8765
+# VRChat PC: 別のターミナル（転送先はローカルUIの8765ではなく8766）
+ tailscale serve --bg --https=8443 http://127.0.0.1:8766
  tailscale serve status
 ```
 
 担当者は `https://vrchat-pc.example-tailnet.ts.net:8443` を開いて「接続」を押すだけです。**tailnetへの参加許可そのものが本人確認を兼ねます。** `--public-origin` は末尾スラッシュなしの正確なOriginです。環境変数 `CAMERA_PUBLIC_ORIGIN` でも指定できます。未指定のホスト名・Origin・クエリ文字列は拒否します。
 
-Tailscale Serveはtailnet経由のリクエストに `Tailscale-User-Login` などの身元ヘッダを付与し、**Funnel経由には付与しません**。本アプリは `--public-origin` で来た接続にこのヘッダを要求するため、Funnelを誤って有効化しても操作画面には入れません。ヘッダの値は操作者名としてUIに表示され、誰が操作権を持っているかが全員に見えます。
+**遠隔用と手元用でポートを分けます。** `--remote-port` はServeの転送先専用で、ここに届いた接続には `Tailscale-User-Login` を必須とします。ヘッダはServeがtailnet経由のリクエストにだけ付け、**Funnel経由には付けません**。したがってFunnelを誤って有効化しても操作画面には入れません。ヘッダの値は操作者名としてUIに表示され、誰が操作権を持っているかが全員に見えます。
 
-この方式が成り立つのは**バックエンドが `127.0.0.1` のみでlistenしているから**です。外部公開すると誰でもヘッダを詐称できます。VRChat PC上の他のローカルプロセスは依然として詐称可能ですが、そのPCで任意コードを実行できる相手はOBSもVRChatも直接操作できるため、ここだけ守っても意味がありません。localhostのOriginから来た接続は身元ヘッダなしで許可し、操作者名を `localhost` と表示します（VRChat PCでの直接操作）。
+手元用の8765は身元ヘッダを要求せず、操作者名を `localhost` と表示します（VRChat PCでの直接操作）。こちらに届いた接続では身元ヘッダを読まないので、詐称しても表示は変わりません。
+
+**判定をOriginやHostで行わないのは、ブラウザ以外のクライアントがそれらを自由に名乗れるためです。** どのリスニングポートに届いたかはクライアントに書き換えられません。だからServeの転送先を別ポートにしています。**8765をServeの転送先にしないでください。** それでは身元確認が外れます。
+
+この方式が成り立つのは**バックエンドが `127.0.0.1` のみでlistenしているから**です。VRChat PC上の他のローカルプロセスは8766へ直接つないでヘッダを詐称できますが、そのPCで任意コードを実行できる相手はOBSもVRChatも直接操作できるため、ここだけ守っても意味がありません。
 
 Tailscale側でも担当者のユーザー／デバイスから**このPCのTCP 8443だけ**を許可するgrants/ACLを設定してください。アプリがネットワーク許可を自動設定するものではありません。外部tailnetへのデバイス共有を使う場合も共有・アクセス方針を確認してください。**Funnel、一般インターネット公開、ルーターのポート開放、OSCの外部公開は不要です。**
 
@@ -91,6 +97,7 @@ Tailscale側でも担当者のユーザー／デバイスから**このPCのTCP 
 |---|---:|---|
 | Webバックエンド | TCP 8765 | 127.0.0.1のみ |
 | Tailscale Serve（上記例） | HTTPS 8443 | 許可したtailnet内 |
+| Serve転送先（--remote-port） | TCP 8766 | 127.0.0.1のみ。身元ヘッダ必須 |
 | VRChatへの送信先 | UDP 9000 | 127.0.0.1のみ |
 | VRChatからの受信 | UDP 9001 | 127.0.0.1のみ |
 
@@ -136,7 +143,7 @@ VRChatはPoseを変化時のみ送るため、カメラを止めれば受信は�
 
 これらはアプリのタイマー設定であり、実ネットワークやOS停止時の遅延保証ではありません。**STOPは新しい絶対Poseの送信を止めるもので、VRChat内蔵の平滑化の残り、他の操作ツール、OBS配信を強制停止しません。** UDPに受領保証はありません。VRChat側で手動操作できる人と確認映像を残してください。
 
-WebSocketはOrigin/Host制限、公開Originでの身元ヘッダ必須、最大4KBメッセージ、接続数16、毎秒80メッセージ／接続の上限を設けています。遅い閲覧者への状態送信はモーションループから分離しています。ブラウザが任意のOSCアドレス・送信ホスト・ファイルパス・シェルコマンドを指定するAPIはありません。
+WebSocketはOrigin/Host制限、Serve転送先ポートでの身元ヘッダ必須、最大4KBメッセージ、接続数16、毎秒80メッセージ／接続の上限を設けています。遅い閲覧者への状態送信はモーションループから分離しています。ブラウザが任意のOSCアドレス・送信ホスト・ファイルパス・シェルコマンドを指定するAPIはありません。
 
 ## テストと検証範囲
 
