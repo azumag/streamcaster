@@ -20,6 +20,7 @@ SETTINGS = {
 LEASE_SECONDS = 1.5
 INPUT_SECONDS = 0.4
 POSE_SECONDS = 5.0
+CAPTURE_SECONDS = 1.0
 
 
 def number(value, low, high):
@@ -146,6 +147,7 @@ class Engine:
         self.udp_error = None
         self.move_at = 0.0
         self.contact_lost = False
+        self.capture_at = None
 
     def emit(self, name, values, types):
         # No browser-provided endpoint, host, port, file path or /input controls.
@@ -305,6 +307,15 @@ class Engine:
             else:
                 # Button release is a hard stop, never an inertial drift.
                 self.velocity = [0.0] * 5
+        elif op == 'capture':
+            # Ask VRChat to take the photo; the file is VRChat's to write and
+            # name. We only ever read the newest one back, never a named path.
+            if self.observed.get('Mode') == 0:
+                raise ValueError('Open the VRChat camera first')
+            if self.capture_at is not None and now - self.capture_at < CAPTURE_SECONDS:
+                raise ValueError('Capture again in a moment')
+            self.capture_at = now
+            self.emit('Capture', [True], 'T')
         elif op == 'save':
             # Save what VRChat last reported. Feedback is change-only, so a still
             # camera goes quiet within seconds and demanding fresh feedback here
@@ -412,6 +423,7 @@ class Engine:
             'poseAge': None if self.pose_at is None else round(now - self.pose_at, 2),
             'reason': self.reason, 'sent': self.sent, 'invalidOsc': self.invalid_osc,
             'contactLost': self.contact_lost,
+            'captureAge': None if self.capture_at is None else round(now - self.capture_at, 2),
             'udpError': self.udp_error,
             'presets': self.presets.data.get(self.profile, {}),
         }

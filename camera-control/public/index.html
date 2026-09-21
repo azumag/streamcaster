@@ -33,6 +33,10 @@
 </div>
 <section class="panel"><h2>03 / 会場別プリセット</h2><div class="actions"><label>会場ID（ワールド移動時は必ず変更）<input id="profile" value="default" maxlength="40" pattern="[A-Za-z0-9_-]+" disabled></label><button id="setProfile" disabled>会場を切替</button><label>移動時間<select id="duration"><option value="0">CUT（即時）</option><option value="1">1秒</option><option value="2.5" selected>2.5秒</option><option value="5">5秒</option><option value="10">10秒</option></select></label></div>
 <div class="preset-grid" id="presets"></div><p class="muted">保存するのはOSCで受信した位置・Zoomです。VRChat内でカメラを動かし、Zoomを操作してから保存してください。会場IDは手動管理で、ワールドの自動識別は行いません。</p></section>
-<section class="panel"><h2>04 / 状態と確認</h2><div class="columns"><div><h3>OSC受信値（観測）</h3><pre id="observed">未受信</pre></div><div><h3>送信値（適用保証なし）</h3><pre id="requested">未送信</pre></div></div><p id="reason" class="muted">未接続</p><p class="warning">このページには映像プレビューがありません。カメラ担当者にはOBS等から別途モニター映像を渡してください。STOPは本アプリの位置送信を止めます。VRChat内部の平滑化の残りや、OBS配信自体を停止する機能ではありません。</p></section>
+<section class="panel"><h2>04 / 撮影プレビュー <span>VRCHAT PHOTO</span></h2><p class="muted">VRChatに写真を撮らせ、保存された最新の1枚を表示します。映像モニターの代わりではなく、構図確認用の静止画です。</p>
+<div class="actions"><button id="capture" disabled>撮影</button><span class="muted">保存フォルダは起動時の <code>--photo-dir</code> 設定のみ。UIからパスは指定できません。</span></div>
+<figure id="photoBox"><img id="photo" alt="VRChatが保存した最新の写真" hidden><figcaption id="photoState" class="muted">未取得</figcaption></figure>
+<p class="muted">写真の保存はVRChat側の動作です。カメラを開いていない・Streamモードなどで保存されない場合、表示は更新されません。</p></section>
+<section class="panel"><h2>05 / 状態と確認</h2><div class="columns"><div><h3>OSC受信値（観測）</h3><pre id="observed">未受信</pre></div><div><h3>送信値（適用保証なし）</h3><pre id="requested">未送信</pre></div></div><p id="reason" class="muted">未接続</p><p class="warning">このページには映像プレビューがありません。カメラ担当者にはOBS等から別途モニター映像を渡してください。STOPは本アプリの位置送信を止めます。VRChat内部の平滑化の残りや、OBS配信自体を停止する機能ではありません。</p></section>
 </main><footer>CAMERA CONTROL · localhost OSC only · no scene switching · no public Funnel</footer>
 </body></html>

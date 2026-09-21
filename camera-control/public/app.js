@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let ws = null, state = null, client = null, authenticated = false, wasMoving = false;
+let ws = null, state = null, client = null, authenticated = false, wasMoving = false, photoAt = null;
 const keys = new Set(), pointers = new Map();
 const mapping = {KeyA:[0,-1],KeyD:[0,1],KeyW:[1,1],KeyS:[1,-1],KeyE:[2,1],KeyQ:[2,-1],ArrowLeft:[3,-1],ArrowRight:[3,1],ArrowUp:[4,-1],ArrowDown:[4,1]};
 function own() { return authenticated && state && state.owner === client; }
@@ -18,6 +18,21 @@ function toast(message, kind = 'error') {
   setTimeout(() => item.remove(), kind === 'error' ? 8000 : 4000);
   notify(message);
 }
+function showPhoto(at) {
+  const img = $('photo');
+  if (at === null || at === undefined) {
+    photoAt = null; img.hidden = true; img.removeAttribute('src');
+    $('photoState').textContent = '写真なし（--photo-dir 未設定か、まだ保存されていません）';
+    return;
+  }
+  if (at === photoAt) return;
+  photoAt = at;
+  // The trailing number is only a cache key: the server always answers with
+  // its own newest file, and the UI never names one.
+  img.src = '/photo/' + Math.round(at * 1000);
+  img.hidden = false;
+  $('photoState').textContent = '最新の写真 ' + new Date(at * 1000).toLocaleTimeString('ja-JP');
+}
 function clearInput(stop = true) {
   keys.clear(); pointers.clear(); wasMoving = false;
   if (stop && own()) send({op:'stop'});
@@ -30,7 +45,7 @@ function availability() {
   $('stop').disabled = !authenticated;
   $('disconnect').disabled = !ws;
   $('connect').disabled = !!ws;
-  document.querySelectorAll('[data-setting],#profile,#setProfile,[data-save]').forEach(e => e.disabled = !owner);
+  document.querySelectorAll('[data-setting],#profile,#setProfile,[data-save],#capture').forEach(e => e.disabled = !owner);
   document.querySelectorAll('[data-axis]').forEach(e => e.disabled = !armed);
   document.querySelectorAll('[data-recall]').forEach(e => e.disabled = !armed || !state.presets[e.dataset.recall]);
 }
@@ -60,6 +75,7 @@ function render(s) {
       name.dataset.profile = s.profile;
     }
   }
+  showPhoto(s.photoAt);
   // Never fire change events or automatically resend controls from feedback.
   // Inputs represent operator intentions; observed values are shown separately.
   availability();
@@ -81,6 +97,7 @@ $('login').addEventListener('submit', event => {
       // A refused save must not consume the overwrite confirmation, so only a
       // server-side acceptance clears it.
       if (data.op === 'save') document.querySelectorAll('[data-save]').forEach(b => b.dataset.confirmUntil = '0');
+      if (data.op === 'capture') $('photoState').textContent = '撮影を指示しました。保存され次第更新します。';
       notify(`受付: ${data.op}（VRChatへの適用はOSC受信値・映像で確認）`);
     }
   });
@@ -95,6 +112,8 @@ $('login').addEventListener('submit', event => {
 });
 $('disconnect').onclick = () => { clearInput(); if (ws) ws.close(); };
 for (const op of ['claim','release','arm','stop']) $(op).onclick = () => { clearInput(false); send({op}); };
+$('capture').onclick = () => send({op:'capture'});
+$('photo').onerror = () => { $('photo').hidden = true; $('photoState').textContent = '写真を読み込めませんでした。'; };
 $('setProfile').onclick = () => { clearInput(); send({op:'profile',value:$('profile').value}); };
 document.querySelectorAll('[data-setting]').forEach(el => {
   el.addEventListener('change', () => send({op:'set',name:el.dataset.setting,value:el.type === 'checkbox' ? el.checked : Number(el.value)}));

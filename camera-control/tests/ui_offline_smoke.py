@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]/'public'
 FAKE=r'''
 window.cameraTest={messages:[]};
-const fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,udpError:null,presets:{}};
+const fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,udpError:null,photoAt:null,presets:{}};
 window.WebSocket=class extends EventTarget {
  static OPEN=1;
  constructor(){super();this.readyState=1;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
@@ -24,6 +24,7 @@ window.WebSocket=class extends EventTarget {
   fixture.presets[m.slot]={name:m.name,pose:fixture.observed.Pose,zoom:45};
   this.event({type:'accepted',op:'save'});
  }
+ if(m.op==='capture'){fixture.photoAt=1758412345.5;this.event({type:'accepted',op:'capture'});}
  if(m.op==='recall')fixture.transitioning=true;
  this.event(fixture);
  }
@@ -69,6 +70,11 @@ async def main():
   await page.locator('[data-save="1"]').click()
   assert await page.locator('#toasts .toast.notice').count()==1, '保存成功後は再び確認を求める'
   await page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t=>t.remove())")
+  # 撮影 asks VRChat for a photo; the preview is keyed on the server's timestamp.
+  assert '写真なし' in await page.locator('#photoState').text_content()
+  await page.locator('#capture').click()
+  assert [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='capture']
+  assert (await page.locator('#photo').get_attribute('src')).endswith('/photo/1758412345500')
   await page.locator('[data-recall="1"]').click();await page.locator('#stop').click()
   assert await page.locator('[data-axis]').first.is_disabled()
   # Remove the deliberate XSS fixture from the presentation screenshot.
@@ -88,6 +94,6 @@ async def main():
   await page.locator('#disconnect').click()
   assert await page.locator('#claim').is_disabled()
   assert not errors,errors
-  print('PASS: offline Chromium DOM / UI controls / keyboard / release / presets / XSS / STOP / responsive width / disconnect (mock WebSocket, not real browser network)')
+  print('PASS: offline Chromium DOM / UI controls / keyboard / release / presets / XSS / capture preview / STOP / responsive width / disconnect (mock WebSocket, not real browser network)')
   await browser.close()
 if __name__=='__main__': asyncio.run(main())

@@ -14,12 +14,14 @@ from aiohttp import web, WSMsgType
 
 from engine import Engine, Presets
 from osc_codec import encode, decode
+from photos import Photos, TYPES
 
 ROOT = Path(__file__).resolve().parent
 ENGINE = web.AppKey('engine', Engine)
 CONFIG = web.AppKey('config', object)
 CLIENTS = web.AppKey('clients', set)
 OPERATORS = web.AppKey('operators', dict)
+PHOTOS = web.AppKey('photos', object)
 HEADERS = {
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; "
                                "connect-src 'self'; img-src 'self'; base-uri 'none'; "
@@ -40,6 +42,7 @@ class Config:
     remote_port: int | None = None
     enable_pose: bool = False
     presets: Path = ROOT / '.data' / 'presets.json'
+    photo_dir: Path | None = None
 
     def __post_init__(self):
         for value in (self.port, self.feedback_port, self.osc_port):
@@ -63,6 +66,9 @@ class Config:
             if (type(self.forward_port) is not int or not 1 <= self.forward_port <= 65535
                     or self.forward_port in (self.feedback_port, self.osc_port)):
                 raise ValueError('Forward port must differ from OSC input and output')
+        if self.photo_dir is not None and not (
+                isinstance(self.photo_dir, Path) and self.photo_dir.is_absolute()):
+            raise ValueError('--photo-dir must be an absolute directory path')
         if self.public_origin:
             origin = urlsplit(self.public_origin)
             if (origin.scheme != 'https' or not origin.hostname or origin.username
@@ -155,6 +161,25 @@ async def static_file(request):
                             headers=response_headers(config, config.origins_for(arrived_on(request))))
 
 
+async def photo(request):
+    """The newest image in the configured folder. There is no path parameter.
+
+    The trailing segment is a cache key the UI copies from the state stream;
+    it is never read here, because a client naming a file is the one thing
+    this endpoint must not allow.
+    """
+    photos = request.app[PHOTOS]
+    found = photos.newest() if photos else None
+    if found is None:
+        raise web.HTTPNotFound(text='No camera photo yet' if photos
+                               else 'Photo preview is not configured')
+    path, _mtime = found
+    config = request.app[CONFIG]
+    return web.FileResponse(path, headers={
+        **response_headers(config, config.origins_for(arrived_on(request))),
+        'Content-Type': TYPES[path.suffix.lower()]})
+
+
 async def health(request):
     # Readiness of THIS HTTP process, never proof VRChat/Spout/OBS works.
     return web.json_response({'service': 'streamcaster-camera-control', 'http': 'ready'})
@@ -193,7 +218,7 @@ async def websocket(request):
     if operator is None:
         # Reached the Serve port without a tailnet identity: Funnel or a bare proxy.
         raise web.HTTPForbidden(text='Tailscale identity required')
-    clients = request.app[CLIENTS]
+    clients, photos = request.app[CLIENTS], request.app[PHOTOS]
     if len(clients) >= 16:
         raise web.HTTPServiceUnavailable(text='Connection limit')
     ws = web.WebSocketResponse(max_msg_size=4096, heartbeat=10, compress=False)
@@ -214,6 +239,8 @@ async def websocket(request):
                 state = engine.state()
                 # Name the holder so a shared surface shows who is driving.
                 state['ownerName'] = operators.get(state['owner'])
+                found = photos.newest() if photos else None
+                state['photoAt'] = round(found[1], 3) if found else None
                 await send({**state, 'client': client, 'operator': operator})
                 await asyncio.sleep(0.1)
         except (ConnectionError, RuntimeError, asyncio.TimeoutError):
@@ -280,6 +307,7 @@ def create_app(config):
 
     engine = Engine(send, Presets(config.presets), enable_pose=config.enable_pose)
     app[ENGINE] = engine
+    app[PHOTOS] = Photos(config.photo_dir) if config.photo_dir else None
 
     async def lifetime(_):
         nonlocal transport
@@ -319,6 +347,8 @@ def create_app(config):
     for path in ('/', '/app.js', '/style.css'):
         app.router.add_get(path, static_file)
     app.router.add_get('/healthz', health)
+    for path in ('/photo', r'/photo/{stamp:\d{1,20}}'):
+        app.router.add_get(path, photo)
     app.router.add_get('/ws', websocket)
     return app
 
@@ -350,12 +380,16 @@ def main():
                         help='Separate loopback port for Tailscale Serve to forward to')
     parser.add_argument('--enable-pose-write', action='store_true')
     parser.add_argument('--presets', type=Path, default=ROOT / '.data' / 'presets.json')
+    parser.add_argument('--photo-dir', type=Path, default=(
+        Path(os.environ['CAMERA_PHOTO_DIR']) if os.environ.get('CAMERA_PHOTO_DIR') else None),
+        help='Folder VRChat saves photos in, e.g. the Pictures/VRChat folder')
     args = parser.parse_args()
     try:
         config = Config(port=args.port, feedback_port=args.feedback_port,
                         osc_port=args.osc_port, forward_port=args.forward_port,
                         public_origin=args.public_origin, remote_port=args.remote_port,
-                        enable_pose=args.enable_pose_write, presets=args.presets)
+                        enable_pose=args.enable_pose_write, presets=args.presets,
+                        photo_dir=args.photo_dir.expanduser().resolve() if args.photo_dir else None)
         app = create_app(config)
         print(f'Camera UI: http://127.0.0.1:{config.port}', flush=True)
         print('Remote access: ' + (
@@ -363,6 +397,8 @@ def main():
             if config.public_origin else 'localhost only'), flush=True)
         print(f'OSC feedback: 127.0.0.1:{config.feedback_port}; send: 127.0.0.1:{config.osc_port}', flush=True)
         print('Pose writes: EXPERIMENTAL ENABLED' if config.enable_pose else 'Pose writes: disabled', flush=True)
+        print(f'Photo preview: {config.photo_dir}' if config.photo_dir
+              else 'Photo preview: disabled (pass --photo-dir)', flush=True)
         ports = [config.port] + ([config.remote_port] if config.remote_port else [])
         run_sites(app, ports)
     except (ValueError, OSError) as exc:

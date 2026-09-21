@@ -184,6 +184,10 @@ the rest default to the names `Setup.ps1` creates under it. Missing configuratio
 stops the launcher rather than guessing a path that exists on one machine. The
 file stays out of git (`*.local.json`), and holds no secrets.
 
+`cameraControl.photoDir` is passed on as `--photo-dir`, the folder VRChat writes
+photos to (usually `%USERPROFILE%\Pictures\VRChat`). The camera UI shows the
+newest image in it after a capture. Leave the key out and the preview is off.
+
 Stopping kills the camera process tree, not just the recorded PID: on Windows the
 venv `python.exe` is a shim that launches the real interpreter as a child, and
 stopping only the shim leaves the ports held and the next start failing.

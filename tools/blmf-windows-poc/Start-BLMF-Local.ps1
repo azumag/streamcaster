@@ -294,6 +294,8 @@ function Start-CameraControl {
         '--forward-port', $cam.forwardPort,
         '--osc-port', $cam.oscPort)
     if ($cam.enablePoseWrite) { $arguments += '--enable-pose-write' }
+    # VRChat が写真を書き出すフォルダ。UI はこの中の最新1枚だけを読む。
+    if ($cam.photoDir) { $arguments += @('--photo-dir', (Get-ConfiguredPath $cam.photoDir 'cameraControl.photoDir')) }
     $out = Join-Path $RunDir 'camera-control.log'
     $err = Join-Path $RunDir 'camera-control.err'
     $proc = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $CamRoot `

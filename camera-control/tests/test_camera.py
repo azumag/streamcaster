@@ -3,8 +3,10 @@ import json
 from pathlib import Path
 import socket
 import struct
+import os
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -12,6 +14,7 @@ from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType, web
 from engine import Engine, Presets, angle_lerp
 from osc_codec import encode, decode
 from osc_probe import summarize, watch
+from photos import Photos
 from state_probe import verdict
 from urllib.parse import urlsplit
 from server import Config, ENGINE, Feedback, create_app, parse_message, response_headers
@@ -264,6 +267,23 @@ class EngineTests(unittest.TestCase):
         self.engine.receive('/usercamera/Mode',[2],'i')
         self.engine.receive('/usercamera/Mode',[6],'i')
         self.assertFalse(self.engine.armed)
+    def test_capture_asks_vrchat_to_take_the_photo(self):
+        self.command(op='capture')
+        self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_capture_needs_an_open_camera_and_does_not_spam_the_disk(self):
+        self.command(op='capture')
+        with self.assertRaises(ValueError): self.command(op='capture')  # one photo per second
+        self.now += 1
+        self.engine.receive('/usercamera/Mode',[0],'i')
+        with self.assertRaises(ValueError): self.command(op='capture')
+        self.engine.receive('/usercamera/Mode',[2],'i')
+        self.command(op='capture')
+    def test_capture_does_not_need_arming_or_stop_motion(self):
+        # Taking a photo moves nothing, so it must work from a plain claim.
+        engine=Engine(lambda *args:self.sent.append(args),self.store,clock=lambda:self.now)
+        engine.dispatch('b',{'op':'claim'})
+        engine.dispatch('b',{'op':'capture'})
+        self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
     def test_bad_feedback_types(self):
         with self.assertRaises(ValueError): self.engine.receive('/usercamera/Pose',[1]*6,'iiiiii')
         with self.assertRaises(ValueError): self.engine.receive('/usercamera/Zoom',[45],'i')
@@ -282,7 +302,8 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         port=free_port(); remote=free_port(); feedback=free_port(socket.SOCK_DGRAM)
         self.config=Config(port=port,feedback_port=feedback,osc_port=self.udp.getsockname()[1],
                            public_origin=PUBLIC,remote_port=remote,enable_pose=True,
-                           presets=Path(self.temp.name)/'presets.json')
+                           presets=Path(self.temp.name)/'presets.json',
+                           photo_dir=Path(self.temp.name)/'photos')
         self.app=create_app(self.config); self.runner=web.AppRunner(self.app)
         await self.runner.setup()
         for bind in (port,remote): await web.TCPSite(self.runner,'127.0.0.1',bind).start()
@@ -316,6 +337,41 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('frame-ancestors',response.headers['Content-Security-Policy'])
         async with self.session.get(self.url+'/.data/presets.json') as response: self.assertEqual(response.status,404)
         async with self.session.get(self.url+'/?token=abc') as response: self.assertEqual(response.status,400)
+    def save_photo(self,name='2026-09/VRChat_1920x1080.png',data=b'fake png bytes',age=5.0):
+        path=self.config.photo_dir/name
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(data)
+        stamp=time.time()-age
+        os.utime(path,(stamp,stamp))
+        return path
+    async def test_photo_is_absent_until_vrchat_saves_one(self):
+        async with self.session.get(self.url+'/photo') as response:
+            self.assertEqual(response.status,404)
+    async def test_photo_serves_only_the_newest_file_and_never_a_named_one(self):
+        self.save_photo('2026-08/older.png',b'old',age=600)
+        newest=self.save_photo()
+        for path in ('/photo','/photo/1758412345678'):
+            async with self.session.get(self.url+path) as response:
+                self.assertEqual(response.status,200)
+                self.assertEqual(response.headers['Content-Type'],'image/png')
+                self.assertEqual(response.headers['Cache-Control'],'no-store')
+                self.assertEqual(await response.read(),newest.read_bytes())
+        # The trailing segment is a cache key, not a file name: nothing else matches.
+        for path in ('/photo/presets.json','/photo/2026-08/older.png','/photo/..%2f..%2fpresets.json'):
+            async with self.session.get(self.url+path) as response:
+                self.assertEqual(response.status,404)
+    async def test_state_timestamps_the_photo_so_the_ui_can_refresh(self):
+        saved=self.save_photo()
+        ws=await self.connect()
+        state=await self.until(ws,'state')
+        self.assertAlmostEqual(state['photoAt'],saved.stat().st_mtime,places=2)
+    async def test_capture_reaches_vrchat_over_udp(self):
+        ws=await self.connect()
+        await ws.send_json({'op':'claim'})
+        await ws.send_json({'op':'capture'})
+        await self.until(ws,'accepted')
+        data=await asyncio.wait_for(asyncio.get_running_loop().sock_recv(self.udp,4096),1)
+        self.assertEqual(decode(data),('/usercamera/Capture',[True],'T'))
     async def test_reject_host_and_origin(self):
         async with self.session.get(self.url+'/',headers={'Host':'evil.test'}) as response: self.assertEqual(response.status,403)
         with self.assertRaises(WSServerHandshakeError): await self.connect(origin='https://evil.test')
@@ -435,6 +491,43 @@ class StateProbeTests(unittest.TestCase):
         self.assertEqual(verdict(None,9002)[0],False)
 
 
+class PhotoTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory()
+        self.root=Path(self.temp.name)
+        self.photos=Photos(self.root,ttl=0,settle=0)
+    def tearDown(self): self.temp.cleanup()
+    def write(self,name,data=b'x',age=0.0):
+        path=self.root/name
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(data)
+        stamp=time.time()-age
+        os.utime(path,(stamp,stamp))
+        return path
+    def test_newest_image_wins_across_the_monthly_folders(self):
+        self.write('2026-08/old.png',age=600)
+        newest=self.write('2026-09/new.png',age=10)
+        self.write('loose.jpg',age=300)
+        self.assertEqual(self.photos.newest()[0],newest)
+    def test_only_images_of_a_plausible_size_are_offered(self):
+        self.write('notes.txt',age=10)
+        self.write('presets.json',age=10)
+        self.write('empty.png',b'',age=10)
+        self.write('huge.png',b'x'*40,age=10)
+        self.assertIsNone(Photos(self.root,ttl=0,settle=0,max_bytes=20).newest())
+    def test_a_photo_still_being_written_is_not_shown_yet(self):
+        self.write('2026-09/fresh.png')
+        self.assertIsNone(Photos(self.root,ttl=0).newest())
+    def test_missing_folder_is_not_an_error(self):
+        self.assertIsNone(Photos(self.root/'nope',ttl=0,settle=0).newest())
+    def test_the_scan_is_cached_between_state_frames(self):
+        first=self.write('a.png',age=10)
+        photos=Photos(self.root,settle=0)
+        self.assertEqual(photos.newest()[0],first)
+        self.write('b.png',age=5)
+        self.assertEqual(photos.newest()[0],first)
+
+
 class ConfigTests(unittest.TestCase):
     def test_config_guards(self):
         for args in ({'port':0},{'osc_port':9001},{'forward_port':9000},
@@ -442,7 +535,9 @@ class ConfigTests(unittest.TestCase):
                      {'public_origin':'https://user:pass@camera.ts.net'},
                      {'public_origin':PUBLIC},                      # publishing without a Serve port
                      {'remote_port':8766},                          # Serve port without publishing
-                     {'public_origin':PUBLIC,'remote_port':8765}):  # Serve port equal to the local one
+                     {'public_origin':PUBLIC,'remote_port':8765},   # Serve port equal to the local one
+                     {'photo_dir':'C:/photos'},                     # a string is not a path
+                     {'photo_dir':Path('photos')}):                 # relative to an unknown cwd
             with self.subTest(args=args), self.assertRaises(ValueError): Config(**args)
     def test_explicit_public_origin(self):
         config=Config(public_origin=PUBLIC,remote_port=8766)
