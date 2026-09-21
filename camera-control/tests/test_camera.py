@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType, web
 from engine import Engine, Presets, angle_lerp
 from osc_codec import encode, decode
+from osc_probe import summarize, watch
 from urllib.parse import urlsplit
 from server import Config, ENGINE, Feedback, create_app, parse_message, response_headers
 
@@ -368,6 +369,38 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(2):
             while (await ws.receive()).type != WSMsgType.CLOSE: pass
         self.assertEqual(ws.close_code,1008)
+
+
+class OscProbeTests(unittest.TestCase):
+    @staticmethod
+    def seen(packets=0,camera=0,undecodable=0,error=None):
+        return {'packets':packets,'camera':camera,'undecodable':undecodable,
+                'addresses':set(),**({'error':error} if error else {})}
+    def test_silence_points_at_vrchat_not_at_the_port(self):
+        lines=summarize({9001:self.seen(),9002:self.seen()},expect=9002)
+        self.assertTrue(any('sent nothing' in line for line in lines))
+    def test_traffic_on_the_wrong_port_names_the_launch_option(self):
+        lines=summarize({9001:self.seen(packets=12,camera=8),9002:self.seen()},expect=9002)
+        self.assertTrue(any('--osc=9000:127.0.0.1:9002' in line for line in lines))
+    def test_matching_port_without_camera_values_says_to_open_the_camera(self):
+        lines=summarize({9002:self.seen(packets=3,undecodable=1)},expect=9002)
+        self.assertTrue(any('matches this setup' in line for line in lines))
+        self.assertTrue(any('open the VRChat camera' in line for line in lines))
+    def test_a_port_already_held_is_reported_not_silently_dropped(self):
+        lines=summarize({9001:self.seen(error='Address already in use')},expect=9001)
+        self.assertTrue(any('could not listen' in line for line in lines))
+    async def _watch_once(self):
+        port=free_port(socket.SOCK_DGRAM)
+        task=asyncio.create_task(watch([port],0.6))
+        await asyncio.sleep(0.2)
+        udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        udp.sendto(encode('/usercamera/Pose',[1,2,3,0,0,0],'ffffff'),('127.0.0.1',port))
+        udp.sendto(b'/avatar/change\0\0,s\0\0avtr_example\0\0\0\0',('127.0.0.1',port))
+        udp.close()
+        return (await task)[port]
+    def test_watch_counts_real_datagrams(self):
+        seen=asyncio.run(self._watch_once())
+        self.assertEqual((seen['packets'],seen['camera'],seen['undecodable']),(2,1,1))
 
 
 class ConfigTests(unittest.TestCase):
