@@ -129,6 +129,8 @@ class Engine:
         self.last_osc_at = None
         self.observed = {}
         self.requested = {}
+        self.observed_at = {}
+        self.requested_at = {}
         self.pose = None
         self.armed = False
         self.axes = [0.0] * 5
@@ -151,6 +153,19 @@ class Engine:
 
     def moving(self):
         return self.transition is not None or any(self.axes) or any(self.velocity)
+
+    def latest(self, name):
+        """Our last command or VRChat's last report, whichever happened later.
+
+        The operator can change a setting inside VRChat after we sent one, so
+        neither side is authoritative on its own; only the newer value is.
+        """
+        sent = self.requested_at.get(name) if name in self.requested else None
+        seen = self.observed_at.get(name) if name in self.observed else None
+        # On a tie VRChat wins: its report is the camera, ours is only a request.
+        if sent is not None and (seen is None or sent > seen):
+            return self.requested[name]
+        return self.observed[name] if seen is not None else None
 
     def resync(self):
         # Pose writes are absolute, so every move restarts from the last position
@@ -196,6 +211,7 @@ class Engine:
                 raise ValueError('Unexpected setting typetag')
             previous = self.observed.get(name)
             self.observed[name] = value
+            self.observed_at[name] = self.clock()
             if name == 'Mode' and (value == 0 or (previous is not None and value != previous)):
                 self.stop('VRChat camera mode changed')
             if name in ('Lock', 'LookAtMe') and value:
@@ -238,6 +254,7 @@ class Engine:
                 self.transition = None
             self.emit(name, [value], kind)
             self.requested[name] = value
+            self.requested_at[name] = now
         elif op == 'profile':
             self.profile = Presets.profile(msg.get('value'))
             self.stop('Venue changed; re-arm in the correct world')
@@ -303,7 +320,9 @@ class Engine:
                 raise ValueError('Need observed Zoom; move its slider in VRChat first')
             self.resync()
             start = list(self.pose)
-            zoom = self.requested.get('Zoom', self.observed.get('Zoom', target['zoom']))
+            zoom = self.latest('Zoom')
+            if zoom is None:
+                zoom = target['zoom']
             self.stop('Preset transition', disarm=False)
             self.transition = (now, duration, start, zoom, target)
         else:
@@ -339,6 +358,7 @@ class Engine:
             self.emit('Pose', self.pose, 'ffffff')
             self.emit('Zoom', [zoom], 'f')
             self.requested['Zoom'] = zoom
+            self.requested_at['Zoom'] = now
             if t >= 1:
                 self.transition = None
             return

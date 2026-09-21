@@ -177,6 +177,20 @@ class EngineTests(unittest.TestCase):
         self.command(op='recall',slot='1',duration=0); self.step()
         self.assertEqual(self.engine.pose[0],10)
         self.assertIsNone(self.engine.transition)
+    def test_recall_starts_from_the_newer_zoom(self):
+        self.store.put('default','1',{'name':'stage','pose':[10,2,20,0,0,0],'zoom':60})
+        self.command(op='set',name='Zoom',value=90)      # we commanded 90
+        self.now += 1
+        self.engine.receive('/usercamera/Zoom',[30.0],'f')  # operator then chose 30 in VRChat
+        self.command(op='recall',slot='1',duration=2); self.step()
+        self.assertAlmostEqual([v for a,v,t in self.sent if a=='/usercamera/Zoom'][-1][0],30,places=1)
+    def test_recall_keeps_our_zoom_when_it_is_the_newer_one(self):
+        self.store.put('default','1',{'name':'stage','pose':[10,2,20,0,0,0],'zoom':60})
+        self.engine.receive('/usercamera/Zoom',[30.0],'f')
+        self.now += 1
+        self.command(op='set',name='Zoom',value=90)
+        self.command(op='recall',slot='1',duration=2); self.step()
+        self.assertAlmostEqual([v for a,v,t in self.sent if a=='/usercamera/Zoom'][-1][0],90,places=1)
     def test_cut_recall_without_observed_zoom(self):
         # VRChat reports Zoom only on change, so a fresh session often lacks it.
         self.command(op='save',slot='1',name='stage')
