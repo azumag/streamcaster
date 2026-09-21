@@ -6,6 +6,18 @@ const mapping = {KeyA:[0,-1],KeyD:[0,1],KeyW:[1,1],KeyS:[1,-1],KeyE:[2,1],KeyQ:[
 function own() { return authenticated && state && state.owner === client; }
 function send(message) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message)); }
 function notify(message) { $('message').textContent = message; }
+function toast(message, kind = 'error') {
+  // Errors used to land in one status line that is easy to miss mid-operation.
+  const item = document.createElement('div');
+  item.className = 'toast ' + kind;
+  item.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  item.textContent = message;
+  item.onclick = () => item.remove();
+  $('toasts').prepend(item);
+  while ($('toasts').childElementCount > 4) $('toasts').lastElementChild.remove();
+  setTimeout(() => item.remove(), kind === 'error' ? 8000 : 4000);
+  notify(message);
+}
 function clearInput(stop = true) {
   keys.clear(); pointers.clear(); wasMoving = false;
   if (stop && own()) send({op:'stop'});
@@ -64,8 +76,13 @@ $('login').addEventListener('submit', event => {
       $('connection').textContent = '認証済み'; $('operator').textContent = data.operator;
       notify('操作権を取得してください。接続しただけではカメラを動かしません。');
     } else if (data.type === 'state') render(data);
-    else if (data.type === 'error') notify(data.message);
-    else if (data.type === 'accepted') notify(`受付: ${data.op}（VRChatへの適用はOSC受信値・映像で確認）`);
+    else if (data.type === 'error') toast(data.message);
+    else if (data.type === 'accepted') {
+      // A refused save must not consume the overwrite confirmation, so only a
+      // server-side acceptance clears it.
+      if (data.op === 'save') document.querySelectorAll('[data-save]').forEach(b => b.dataset.confirmUntil = '0');
+      notify(`受付: ${data.op}（VRChatへの適用はOSC受信値・映像で確認）`);
+    }
   });
   ws.addEventListener('close', () => {
     clearInput(false); ws = null; authenticated = false; client = null; state = null;
@@ -136,9 +153,8 @@ for (let i = 1; i <= 8; i++) {
     // Non-blocking overwrite confirmation keeps the heartbeat running.
     if (state && state.presets[String(i)] && Date.now() > Number(save.dataset.confirmUntil || 0)) {
       save.dataset.confirmUntil = String(Date.now() + 5000);
-      notify(`CAM ${i} を上書きするには5秒以内にもう一度「保存」を押してください。`); return;
+      toast(`CAM ${i} を上書きするには5秒以内にもう一度「保存」を押してください。`, 'notice'); return;
     }
-    save.dataset.confirmUntil = '0';
     send({op:'save',slot:String(i),name:name.value});
   };
   actions.append(recall,save); box.append(title,status,name,actions); $('presets').append(box);

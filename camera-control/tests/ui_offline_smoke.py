@@ -19,7 +19,11 @@ window.WebSocket=class extends EventTarget {
  if(m.op==='profile'){fixture.profile=m.value;fixture.armed=false;}
  if(m.op==='set'){fixture.requested[m.name]=m.value;fixture.sent++;}
  if(m.op==='motion'){fixture.commandedPose=[10,2,20.2,0,0,0];fixture.sent++;}
- if(m.op==='save')fixture.presets[m.slot]={name:m.name,pose:fixture.observed.Pose,zoom:45};
+ if(m.op==='save'){
+  if(cameraTest.refuseSave){this.event({type:'error',message:'Need observed Zoom; move its slider in VRChat first'});return;}
+  fixture.presets[m.slot]={name:m.name,pose:fixture.observed.Pose,zoom:45};
+  this.event({type:'accepted',op:'save'});
+ }
  if(m.op==='recall')fixture.transitioning=true;
  this.event(fixture);
  }
@@ -50,6 +54,21 @@ async def main():
   assert await page.locator('#presetState1').text_content()=='ステージ全景'
   await page.locator('#name2').fill('<img src=x onerror=alert(1)>');await page.locator('[data-save="2"]').click()
   assert await page.locator('#presets img').count()==0
+  # Overwriting asks once; a refused save must not consume that confirmation,
+  # or the operator is stuck re-confirming forever (as they were).
+  await page.evaluate('cameraTest.refuseSave=true')
+  await page.locator('[data-save="1"]').click()
+  assert await page.locator('#toasts .toast.notice').count()==1
+  await page.locator('[data-save="1"]').click()
+  assert await page.locator('#toasts .toast.error').count()==1, '拒否はトーストで出る'
+  await page.locator('[data-save="1"]').click()
+  assert await page.locator('#toasts .toast.notice').count()==1, '確認は消費されない'
+  await page.evaluate('cameraTest.refuseSave=false')
+  await page.locator('[data-save="1"]').click()
+  await page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t=>t.remove())")
+  await page.locator('[data-save="1"]').click()
+  assert await page.locator('#toasts .toast.notice').count()==1, '保存成功後は再び確認を求める'
+  await page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t=>t.remove())")
   await page.locator('[data-recall="1"]').click();await page.locator('#stop').click()
   assert await page.locator('[data-axis]').first.is_disabled()
   # Remove the deliberate XSS fixture from the presentation screenshot.

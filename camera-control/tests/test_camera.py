@@ -159,6 +159,20 @@ class EngineTests(unittest.TestCase):
         self.command(op='save',slot='1',name='ステージ')
         self.assertEqual(Presets(self.store.path).data['default']['1']['pose'],[10,2,20,0,0,0])
         self.assertEqual(self.store.data['default']['1']['zoom'],45)
+    def test_preset_save_works_after_the_camera_has_been_held_still(self):
+        # Framing a shot and holding it is the normal way to save one.
+        self.idle(8)
+        self.command(op='save',slot='1',name='stage')
+        self.assertEqual(self.store.data['default']['1']['pose'],[10,2,20,0,0,0])
+    def test_preset_save_refused_after_contact_is_lost(self):
+        for _ in range(60):  # Held input while VRChat never echoes back.
+            self.now += 0.1
+            self.command(op='heartbeat')
+            try: self.command(op='motion',axes=[0,1,0,0,0],speed=1)
+            except ValueError: pass
+            self.engine.tick(0.1)
+        self.assertTrue(self.engine.contact_lost)
+        with self.assertRaises(ValueError): self.command(op='save',slot='1',name='stage')
     def test_preset_save_requires_observed_zoom(self):
         self.engine.observed.pop('Zoom')
         with self.assertRaises(ValueError): self.command(op='save',slot='1',name='stage')

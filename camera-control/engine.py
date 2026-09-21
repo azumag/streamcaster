@@ -306,8 +306,13 @@ class Engine:
                 # Button release is a hard stop, never an inertial drift.
                 self.velocity = [0.0] * 5
         elif op == 'save':
-            if self.pose_at is None or now - self.pose_at > POSE_SECONDS:
-                raise ValueError('Need recent observed Pose before saving')
+            # Save what VRChat last reported. Feedback is change-only, so a still
+            # camera goes quiet within seconds and demanding fresh feedback here
+            # made saving impossible exactly when the shot was framed and held.
+            if 'Pose' not in self.observed:
+                raise ValueError('No Pose feedback yet; open and move the VRChat camera first')
+            if self.contact_lost:
+                raise ValueError('Lost Pose feedback while moving; check VRChat, then move the camera')
             if 'Zoom' not in self.observed:
                 raise ValueError('Need observed Zoom; move its slider in VRChat first')
             if self.transition or any(self.axes) or any(self.velocity):
