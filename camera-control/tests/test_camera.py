@@ -145,9 +145,21 @@ class EngineTests(unittest.TestCase):
         self.assertIn('stale',self.engine.reason)
         self.engine.receive('/usercamera/Pose',[10,2,20,0,0,0],'ffffff')
         self.assertFalse(self.engine.state()['contactLost'])
-    def test_stale_pose_cannot_arm(self):
-        self.now += 6; self.engine.dispatch('a',{'op':'claim'})
-        with self.assertRaises(ValueError): self.command(op='arm')
+    def test_a_camera_held_still_can_still_be_armed(self):
+        # Framing a shot and then reaching the browser takes longer than the
+        # five seconds this used to allow, and a still camera reports nothing.
+        self.now += 60; self.engine.dispatch('a',{'op':'claim'})
+        self.command(op='arm')
+        self.assertTrue(self.engine.armed)
+        self.assertEqual(self.engine.pose,[10,2,20,0,0,0])
+    def test_arming_still_needs_a_position_and_live_contact(self):
+        engine=Engine(lambda *a:None,self.store,enable_pose=True,clock=lambda:self.now)
+        engine.dispatch('b',{'op':'claim'})
+        with self.assertRaises(ValueError): engine.dispatch('b',{'op':'arm'})
+        engine.receive('/usercamera/Pose',[10,2,20,0,0,0],'ffffff')
+        engine.dispatch('b',{'op':'arm'})
+        engine.contact_lost=True
+        with self.assertRaises(ValueError): engine.dispatch('b',{'op':'arm'})
     def test_feedback_does_not_overwrite_active_target(self):
         self.engine.receive('/usercamera/Pose',[1,1,1,0,0,0],'ffffff')
         self.assertEqual(self.engine.pose[:3],[10,2,20])
@@ -198,6 +210,8 @@ class EngineTests(unittest.TestCase):
         self.command(op='profile',value='venue-2')
         self.assertFalse(self.engine.armed)
         with self.assertRaises(ValueError): self.command(op='arm')
+        # Another world's coordinates must not be saved as this one's either.
+        with self.assertRaises(ValueError): self.command(op='save',slot='1',name='stage')
     def test_preset_interpolates_shortest_yaw(self):
         self.store.put('default','1',{'name':'stage','pose':[20,2,20,0,-179,0],'zoom':85})
         self.engine.receive('/usercamera/Pose',[10,2,20,0,179,0],'ffffff')

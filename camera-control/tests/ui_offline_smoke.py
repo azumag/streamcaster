@@ -84,13 +84,18 @@ async def main():
   assert (await page.locator('#photo').get_attribute('src')).endswith('/photo/1758412345500')
   # After a restart VRChat has reported nothing, and change-only feedback means
   # it stays that way until the camera moves. Say so before 保存 is pressed.
-  assert await page.locator('#saveReady').is_hidden()
+  assert await page.locator('#presetReady').is_hidden()
   await page.evaluate("cameraTest.socket.event({...cameraTest.socket.fixture, observed:{}})")
-  assert 'カメラを一度動かして' in await page.locator('#saveReady').text_content()
+  assert 'カメラを一度動かして' in await page.locator('#presetReady').text_content()
   await page.evaluate("cameraTest.socket.event({...cameraTest.socket.fixture, observed:{Pose:[1,2,3,0,0,0]}})")
-  assert 'Zoom' in await page.locator('#saveReady').text_content()
+  assert 'Zoom' in await page.locator('#presetReady').text_content()
   await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
-  assert await page.locator('#saveReady').is_hidden()
+  assert await page.locator('#presetReady').is_hidden()
+  # 呼出 is greyed out until ARM; a disabled button explains nothing by itself.
+  await page.evaluate("cameraTest.socket.event({...cameraTest.socket.fixture, armed:false})")
+  assert 'ARM' in await page.locator('#presetReady').text_content()
+  assert await page.locator('[data-recall="1"]').is_disabled()
+  await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
   await page.locator('[data-recall="1"]').click();await page.locator('#stop').click()
   assert await page.locator('[data-axis]').first.is_disabled()
   # Remove the deliberate XSS fixture from the presentation screenshot.

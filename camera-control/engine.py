@@ -279,13 +279,22 @@ class Engine:
         elif op == 'profile':
             self.profile = Presets.profile(msg.get('value'))
             self.stop('Venue changed; re-arm in the correct world')
-            self.pose_at = None  # Do not reuse a previous world's feedback.
+            # Forget where the camera was, not merely when we heard it: another
+            # world's coordinates must never be saved or moved to as if current.
+            self.observed.pop('Pose', None)
+            self.pose = None
+            self.pose_at = None
         elif op == 'arm':
             if not self.enable_pose:
                 raise ValueError('Pose writes disabled: start with --enable-pose-write for rehearsal')
-            # The one explicit handshake: prove the camera is live before taking it.
-            if self.pose_at is None or now - self.pose_at > POSE_SECONDS:
-                raise ValueError('No recent Pose feedback; open/move the VRChat camera first')
+            # Arming takes the last position VRChat reported, however long ago.
+            # Within one server lifetime that report IS the camera: VRChat sends
+            # Pose whenever it changes, so silence means the camera has not
+            # moved. Demanding a report from the last five seconds meant framing
+            # a shot, reaching the browser and pressing ARM inside that window,
+            # which is not a thing an operator can do. Liveness is proven where
+            # it matters instead: every move resyncs first, and contact loss
+            # stops motion within five seconds of starting it.
             if self.observed.get('Mode') == 0:
                 raise ValueError('Open the VRChat camera first')
             if self.observed.get('Lock') or self.observed.get('LookAtMe'):
