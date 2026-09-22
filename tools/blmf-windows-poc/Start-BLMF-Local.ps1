@@ -296,6 +296,15 @@ function Start-CameraControl {
     if ($cam.enablePoseWrite) { $arguments += '--enable-pose-write' }
     # VRChat が写真を書き出すフォルダ。UI はこの中の最新1枚だけを読む。
     if ($cam.photoDir) { $arguments += @('--photo-dir', (Get-ConfiguredPath $cam.photoDir 'cameraControl.photoDir')) }
+    # Tailscale Serve の転送先。手元用ポートとは必ず別にする (身元確認が
+    # 「どのポートに届いたか」で決まるため)。両方そろっていないと起動しない。
+    if ($cam.publicOrigin -or $cam.remotePort) {
+        if (-not ($cam.publicOrigin -and $cam.remotePort)) {
+            Write-Err2 '設定には cameraControl.publicOrigin と remotePort の両方が必要です'
+            return $false
+        }
+        $arguments += @('--public-origin', $cam.publicOrigin, '--remote-port', $cam.remotePort)
+    }
     $out = Join-Path $RunDir 'camera-control.log'
     $err = Join-Path $RunDir 'camera-control.err'
     $proc = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $CamRoot `

@@ -188,6 +188,13 @@ file stays out of git (`*.local.json`), and holds no secrets.
 photos to (usually `%USERPROFILE%\Pictures\VRChat`). The camera UI shows the
 newest image in it after a capture. Leave the key out and the preview is off.
 
+`cameraControl.publicOrigin` and `remotePort` turn on remote access, and must be
+set together: they become `--public-origin` and `--remote-port`, the separate
+loopback port Tailscale Serve forwards to. The camera server decides who may
+operate by which listening port a connection arrived on, so the Serve target has
+to be a different port from the local UI. The Serve configuration itself is
+Tailscale's and persists on its own; the launcher does not create or change it.
+
 Stopping kills the camera process tree, not just the recorded PID: on Windows the
 venv `python.exe` is a shim that launches the real interpreter as a child, and
 stopping only the shim leaves the ports held and the next start failing.

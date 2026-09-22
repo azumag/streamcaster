@@ -17,6 +17,8 @@
     "forwardPort": 9001,
     "oscPort": 9000,
     "enablePoseWrite": true,
-    "photoDir": "%USERPROFILE%\\Pictures\\VRChat"
+    "photoDir": "%USERPROFILE%\\Pictures\\VRChat",
+    "publicOrigin": "https://vrchat-pc.example-tailnet.ts.net:8443",
+    "remotePort": 8766
   }
 }
