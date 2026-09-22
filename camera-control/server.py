@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import socket
 import time
 from urllib.parse import urlsplit
 
@@ -104,8 +105,13 @@ def response_headers(config, origins=None):
 
 
 class Feedback(asyncio.DatagramProtocol):
-    def __init__(self, engine, config):
+    def __init__(self, engine, config, forward=None):
         self.engine, self.config, self.transport = engine, config, None
+        # The optional fan-out gets its own socket. Windows reports a closed
+        # destination as an error on the socket that sent to it, so sharing one
+        # meant that an operator bridge which simply was not running stopped the
+        # camera and disarmed it, over and over, for as long as VRChat spoke.
+        self.forward = forward
 
     def connection_made(self, transport):
         self.transport = transport
@@ -113,9 +119,12 @@ class Feedback(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         if addr[0] != '127.0.0.1':
             return
-        if self.config.forward_port:
+        if self.config.forward_port and self.forward is not None:
             # Optional explicit fan-out; the existing operator bridge is unchanged.
-            self.transport.sendto(data, ('127.0.0.1', self.config.forward_port))
+            try:
+                self.forward.sendto(data, ('127.0.0.1', self.config.forward_port))
+            except OSError:
+                pass  # That consumer is not listening. Not this camera's problem.
         # Even a packet this codec rejects proves VRChat is sending to this port.
         self.engine.note_traffic()
         try:
@@ -334,8 +343,13 @@ def create_app(config):
     async def lifetime(_):
         nonlocal transport
         loop = asyncio.get_running_loop()
+        forward = None
+        if config.forward_port:
+            forward = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            forward.setblocking(False)
+            forward.bind(('127.0.0.1', 0))
         transport, _protocol = await loop.create_datagram_endpoint(
-            lambda: Feedback(engine, config), local_addr=('127.0.0.1', config.feedback_port))
+            lambda: Feedback(engine, config, forward), local_addr=('127.0.0.1', config.feedback_port))
 
         async def motion_loop():
             previous = time.monotonic()
@@ -358,6 +372,8 @@ def create_app(config):
                 await task
             transport.close()
             transport = None
+            if forward is not None:
+                forward.close()
 
     async def shutdown(_):
         engine.stop('Server shutting down')

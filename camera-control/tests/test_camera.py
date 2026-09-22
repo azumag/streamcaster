@@ -597,18 +597,34 @@ class ConfigTests(unittest.TestCase):
             self.assertIsNone(engine.last_osc_at)
     def test_forwarding_preserves_original_payload(self):
         sent=[]
-        class Transport:
+        class Socket:
             def sendto(self,data,addr): sent.append((data,addr))
         class FakeEngine:
             invalid_osc=0
             def note_traffic(self): pass
             def receive(self,*args): pass
         config=Config(feedback_port=9002,forward_port=9001)
-        receiver=Feedback(FakeEngine(),config); receiver.connection_made(Transport())
+        receiver=Feedback(FakeEngine(),config,Socket()); receiver.connection_made(Socket())
         payload=b'/avatar/change\0\0,s\0\0avtr_example\0\0\0\0'
         receiver.datagram_received(payload,('127.0.0.1',9000))
         self.assertEqual(sent,[(payload,('127.0.0.1',9001))])
         receiver.datagram_received(payload,('192.0.2.1',9000)); self.assertEqual(len(sent),1)
+    def test_a_bridge_that_is_not_running_does_not_stop_the_camera(self):
+        # Windows answers a closed UDP port with a refusal on the sending socket.
+        # Sharing one socket meant a bridge nobody started disarmed the camera,
+        # over and over, for as long as VRChat kept speaking.
+        stopped=[]
+        class Socket:
+            def sendto(self,data,addr): raise ConnectionResetError('no bridge there')
+        class FakeEngine:
+            invalid_osc=0
+            def note_traffic(self): pass
+            def receive(self,*args): pass
+            def stop(self,*args,**kwargs): stopped.append(args)
+        config=Config(feedback_port=9002,forward_port=9001)
+        receiver=Feedback(FakeEngine(),config,Socket()); receiver.connection_made(Socket())
+        receiver.datagram_received(encode('/usercamera/Zoom',[45.0],'f'),('127.0.0.1',9000))
+        self.assertEqual(stopped,[])
 
 
 if __name__=='__main__': unittest.main()
