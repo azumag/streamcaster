@@ -112,12 +112,26 @@ function render(s) {
     $('presetValue'+i).textContent = saved
       ? `Zoom ${saved.zoom.toFixed(1)} / x ${saved.pose[0].toFixed(2)} y ${saved.pose[1].toFixed(2)} z ${saved.pose[2].toFixed(2)}`
       : '';
+    // Coordinates do not tell an operator what a preset looks like. The photo
+    // taken when it was saved does. The last segment is only a cache key: the
+    // server answers from its own store, whatever the URL says.
+    const thumb = $('presetPhoto'+i);
+    if (saved && saved.photo) {
+      const src = `/preset-photo/${encodeURIComponent(s.profile)}/${i}/${encodeURIComponent(saved.photo)}`;
+      if (thumb.getAttribute('src') !== src) thumb.src = src;
+      thumb.hidden = false;
+    } else {
+      thumb.hidden = true; thumb.removeAttribute('src');
+    }
     if (document.activeElement !== name && name.dataset.profile !== s.profile) {
       name.value = saved ? saved.name : `CAM ${i}`;
       name.dataset.profile = s.profile;
     }
   }
   if (document.activeElement !== $('autoCapture')) $('autoCapture').checked = s.autoCapture;
+  // The preview keeps showing the previous shot until the new file lands, so
+  // say a photo is on its way rather than letting a stale frame read as fresh.
+  $('photoWait').hidden = !s.awaitingPhoto;
   showPhoto(s.photoAt);
   // Never fire change events or automatically resend controls from feedback.
   // Inputs represent operator intentions; observed values are shown separately.
@@ -234,6 +248,9 @@ for (let i = 1; i <= 8; i++) {
   const box = document.createElement('div'); box.className = 'preset';
   const title = document.createElement('strong'); title.textContent = `CAM ${i}`;
   const status = document.createElement('p'); status.id = 'presetState'+i; status.textContent = '未保存'; status.className = 'name';
+  const thumb = document.createElement('img'); thumb.id = 'presetPhoto'+i; thumb.className = 'thumb';
+  thumb.alt = `CAM ${i} 保存時の構図`; thumb.hidden = true;
+  thumb.onerror = () => { thumb.hidden = true; };
   const values = document.createElement('p'); values.id = 'presetValue'+i; values.className = 'stored';
   const name = document.createElement('input'); name.id = 'name'+i; name.maxLength = 48; name.value = `CAM ${i}`; name.setAttribute('aria-label',`CAM ${i} 保存名`);
   const actions = document.createElement('div'); actions.className = 'actions';
@@ -249,7 +266,7 @@ for (let i = 1; i <= 8; i++) {
     savingSlot = i;
     send({op:'save',slot:String(i),name:name.value});
   };
-  actions.append(recall,save); box.append(title,status,values,name,actions); $('presets').append(box);
+  actions.append(recall,save); box.append(title,status,thumb,values,name,actions); $('presets').append(box);
 }
 availability();
 connect();

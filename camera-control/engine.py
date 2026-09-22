@@ -97,13 +97,32 @@ class Presets:
         return value
 
     @staticmethod
+    def photo(value):
+        """A file name VRChat chose, never a path: no separators, no walking up."""
+        if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,120}', value):
+            raise ValueError('Preset photo must be a plain file name')
+        if value.startswith('.') or not value.lower().endswith(('.png', '.jpg', '.jpeg')):
+            raise ValueError('Preset photo must be an image file name')
+        return value
+
+    @staticmethod
     def validate(value):
-        if not isinstance(value, dict) or set(value) != {'name', 'pose', 'zoom'}:
+        if not isinstance(value, dict) or not {'name', 'pose', 'zoom'} <= set(value)                 or set(value) - {'name', 'pose', 'zoom', 'photo'}:
             raise ValueError('Invalid preset')
         if not isinstance(value['name'], str) or not 1 <= len(value['name']) <= 48:
             raise ValueError('Preset name must contain 1-48 characters')
         pose_value(value['pose'])
         number(value['zoom'], 20, 150)
+        if 'photo' in value:
+            Presets.photo(value['photo'])
+
+    def attach(self, profile, slot, photo):
+        """Remember which photo shows this preset's framing."""
+        stored = self.data.get(self.profile(profile), {}).get(self.slot(slot))
+        if stored is None:
+            return False
+        self.put(profile, slot, {**stored, 'photo': self.photo(photo)})
+        return True
 
     def put(self, profile, slot, value):
         self.profile(profile)
@@ -159,6 +178,9 @@ class Engine:
         self.capture_at = None
         self.auto_capture = True
         self.settle_at = None
+        # Which preset the next photo belongs to, so a saved shot can show the
+        # framing it stored rather than a list of coordinates.
+        self.photo_for = None
         self.was_moving = False
 
     def emit(self, name, values, types):
@@ -363,10 +385,15 @@ class Engine:
                 raise ValueError('Need observed Zoom; move its slider in VRChat first')
             if self.transition or any(self.axes) or any(self.velocity):
                 raise ValueError('Stop camera movement before saving')
-            self.presets.put(self.profile, msg.get('slot'), {
+            slot = msg.get('slot')
+            self.presets.put(self.profile, slot, {
                 'name': msg.get('name'), 'pose': list(self.observed['Pose']),
                 'zoom': self.observed['Zoom'],
             })
+            # The camera is framed and still at this exact moment, which is the
+            # only moment a picture of this preset can be taken.
+            if self.auto_capture and self.observed.get('Mode') != 0 and not self.contact_lost                     and self.capture(now):
+                self.photo_for = (self.profile, slot)
         elif op == 'recall':
             if not self.armed:
                 raise ValueError('Arm from observed Pose first')
@@ -475,6 +502,7 @@ class Engine:
             'contactLost': self.contact_lost,
             'captureAge': None if self.capture_at is None else round(now - self.capture_at, 2),
             'autoCapture': self.auto_capture,
+            'settling': self.settle_at is not None,
             'udpError': self.udp_error,
             'presets': self.presets.data.get(self.profile, {}),
         }

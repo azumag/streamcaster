@@ -17,7 +17,7 @@ from osc_probe import summarize, watch
 from photos import Photos
 from state_probe import verdict
 from urllib.parse import urlsplit
-from server import Config, ENGINE, Feedback, create_app, named, parse_message, response_headers
+from server import Config, ENGINE, Feedback, awaiting_photo, create_app, named, parse_message, response_headers
 
 PUBLIC = 'https://camera.example.ts.net:8443'
 
@@ -348,6 +348,20 @@ class EngineTests(unittest.TestCase):
         self.sent.clear()
         self.idle(1.5)
         self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_saving_a_preset_photographs_the_shot_it_stored(self):
+        self.command(op='save',slot='1',name='CAM 1')
+        self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
+        self.assertEqual(self.engine.photo_for,('default','1'))
+        self.store.attach('default','1','VRChat_2026-09-22_19-07-02.111_1920x1080.png')
+        self.assertEqual(Presets(self.store.path).data['default']['1']['photo'],
+                         'VRChat_2026-09-22_19-07-02.111_1920x1080.png')
+    def test_a_preset_photo_is_a_file_name_and_never_a_path(self):
+        for bad in ('../secrets.png','a/b.png','C:' + chr(92) + 'x.png','notes.txt','.hidden.png','','x'*200+'.png'):
+            with self.subTest(bad=bad), self.assertRaises(ValueError): Presets.photo(bad)
+        with self.assertRaises(ValueError):
+            self.store.put('default','2',{'name':'x','pose':[0]*6,'zoom':45,'photo':'../a.png'})
+        with self.assertRaises(ValueError):
+            self.store.put('default','2',{'name':'x','pose':[0]*6,'zoom':45,'extra':1})
     def test_bad_feedback_types(self):
         with self.assertRaises(ValueError): self.engine.receive('/usercamera/Pose',[1]*6,'iiiiii')
         with self.assertRaises(ValueError): self.engine.receive('/usercamera/Zoom',[45],'i')
@@ -422,6 +436,23 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await response.read(),newest.read_bytes())
         # The trailing segment is a cache key, not a file name: nothing else matches.
         for path in ('/photo/presets.json','/photo/2026-08/older.png','/photo/..%2f..%2fpresets.json'):
+            async with self.session.get(self.url+path) as response:
+                self.assertEqual(response.status,404)
+    async def test_preset_photo_comes_from_the_store_not_the_url(self):
+        saved=self.save_photo('2026-09/VRChat_shot.png',b'preset framing',age=5)
+        self.save_photo('2026-09/newer.png',b'something else',age=1)
+        engine=self.app[ENGINE]
+        engine.presets.put('default','1',{'name':'CAM 1','pose':[1,2,3,0,0,0],'zoom':45})
+        async with self.session.get(self.url+'/preset-photo/default/1') as response:
+            self.assertEqual(response.status,404)  # saved before photos existed
+        engine.presets.attach('default','1','VRChat_shot.png')
+        for path in ('/preset-photo/default/1','/preset-photo/default/1/VRChat_shot.png',
+                     '/preset-photo/default/1/anything-at-all.png'):
+            async with self.session.get(self.url+path) as response:
+                self.assertEqual(response.status,200)
+                self.assertEqual(await response.read(),saved.read_bytes())
+        for path in ('/preset-photo/default/9','/preset-photo/bad!/1','/preset-photo/other/1',
+                     '/preset-photo/default/1/../../presets.json'):
             async with self.session.get(self.url+path) as response:
                 self.assertEqual(response.status,404)
     async def test_state_timestamps_the_photo_so_the_ui_can_refresh(self):
@@ -600,6 +631,26 @@ class PhotoTests(unittest.TestCase):
         self.assertEqual(photos.newest()[0],first)
         self.write('b.png',age=5)
         self.assertEqual(photos.newest()[0],first)
+
+
+class AwaitingPhotoTests(unittest.TestCase):
+    class FakeEngine:
+        def __init__(self, capture_at=None, settle_at=None, now=100.0):
+            self.capture_at, self.settle_at, self.now = capture_at, settle_at, now
+        def clock(self): return self.now
+
+    def test_nothing_asked_for_means_nothing_to_wait_for(self):
+        self.assertFalse(awaiting_photo(self.FakeEngine(), None))
+        self.assertFalse(awaiting_photo(self.FakeEngine(), (Path('a.png'), time.time())))
+    def test_a_scheduled_confirmation_shot_counts_as_waiting(self):
+        self.assertTrue(awaiting_photo(self.FakeEngine(settle_at=101.0), None))
+    def test_waiting_until_a_file_newer_than_the_request_appears(self):
+        engine=self.FakeEngine(capture_at=98.0)          # asked for 2 seconds ago
+        self.assertTrue(awaiting_photo(engine,(Path('old.png'), time.time()-30)))
+        self.assertFalse(awaiting_photo(engine,(Path('new.png'), time.time()-1)))
+    def test_a_photo_that_never_arrives_stops_being_promised(self):
+        engine=self.FakeEngine(capture_at=100.0, now=111.0)
+        self.assertFalse(awaiting_photo(engine, None))
 
 
 class ConfigTests(unittest.TestCase):

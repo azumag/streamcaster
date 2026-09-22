@@ -137,6 +137,39 @@ class Feedback(asyncio.DatagramProtocol):
         self.engine.stop('UDP error; check VRChat')
 
 
+# A photo takes a moment to be asked for, taken, written and noticed. Saying
+# so beats a preview that silently shows the previous shot for two seconds.
+PHOTO_WAIT = 10.0
+
+
+def awaiting_photo(engine, found):
+    """True while a shot has been asked for and the file is not here yet."""
+    if engine.settle_at is not None:
+        return True
+    if engine.capture_at is None:
+        return False
+    since = engine.clock() - engine.capture_at
+    if since > PHOTO_WAIT:
+        return False  # VRChat saved nothing; stop claiming one is coming.
+    # Durations, never a comparison between the two clocks these come from.
+    return found is None or time.time() - found[1] > since
+
+
+def link_photo(engine, photos):
+    """Give a saved preset the photo VRChat took for it, once the file exists."""
+    if photos is None or engine.photo_for is None or engine.capture_at is None:
+        return
+    since = engine.clock() - engine.capture_at
+    found = photos.newest()
+    if found is not None and time.time() - found[1] <= since:
+        profile, slot = engine.photo_for
+        engine.photo_for = None
+        with suppress(OSError, ValueError):
+            engine.presets.attach(profile, slot, found[0].name)
+    elif since > PHOTO_WAIT:
+        engine.photo_for = None  # VRChat never wrote one; stop waiting for it.
+
+
 def named(command):
     """The op a client asked for, or a placeholder when the message never parsed."""
     if isinstance(command, dict) and isinstance(command.get('op'), str):
@@ -206,6 +239,31 @@ async def photo(request):
         'Content-Type': TYPES[path.suffix.lower()]})
 
 
+async def preset_photo(request):
+    """The photo taken when this preset was saved. The path names a preset.
+
+    Slot and venue are validated identifiers from our own store, and the file
+    name is the store's, not the caller's. The trailing segment is a cache key
+    and is never read.
+    """
+    photos, engine = request.app[PHOTOS], request.app[ENGINE]
+    if photos is None:
+        raise web.HTTPNotFound(text='Photo preview is not configured')
+    try:
+        profile = Presets.profile(request.match_info['profile'])
+        slot = Presets.slot(request.match_info['slot'])
+    except ValueError:
+        raise web.HTTPNotFound(text='No such preset')
+    stored = engine.presets.data.get(profile, {}).get(slot) or {}
+    path = photos.locate(stored['photo']) if stored.get('photo') else None
+    if path is None:
+        raise web.HTTPNotFound(text='That preset has no photo')
+    config = request.app[CONFIG]
+    return web.FileResponse(path, headers={
+        **response_headers(config, config.origins_for(arrived_on(request))),
+        'Content-Type': TYPES[path.suffix.lower()]})
+
+
 async def health(request):
     # Readiness of THIS HTTP process, never proof VRChat/Spout/OBS works.
     return web.json_response({'service': 'streamcaster-camera-control', 'http': 'ready'})
@@ -267,6 +325,7 @@ async def websocket(request):
                 state['ownerName'] = operators.get(state['owner'])
                 found = photos.newest() if photos else None
                 state['photoAt'] = round(found[1], 3) if found else None
+                state['awaitingPhoto'] = bool(photos) and awaiting_photo(engine, found)
                 await send({**state, 'client': client, 'operator': operator})
                 await asyncio.sleep(0.1)
         except (ConnectionError, RuntimeError, asyncio.TimeoutError):
@@ -358,6 +417,7 @@ def create_app(config):
                 now = time.monotonic()
                 try:
                     engine.tick(now - previous)
+                    link_photo(engine, app[PHOTOS])
                 except (OSError, ValueError, OverflowError):
                     engine.stop('Motion output failed; re-arm after checking server')
                 previous = now
@@ -387,6 +447,9 @@ def create_app(config):
     app.router.add_get('/healthz', health)
     for path in ('/photo', r'/photo/{stamp:\d{1,20}}'):
         app.router.add_get(path, photo)
+    for path in ('/preset-photo/{profile}/{slot}',
+                 r'/preset-photo/{profile}/{slot}/{key:[A-Za-z0-9._-]{1,120}}'):
+        app.router.add_get(path, preset_photo)
     app.router.add_get('/ws', websocket)
     return app
 

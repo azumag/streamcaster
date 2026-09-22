@@ -94,7 +94,8 @@ async def main():
                 # DOM-based labels are rendered as text, never HTML.
                 await page.locator('#name2').fill('<img src=x onerror=alert(1)>')
                 await page.locator('[data-save="2"]').click(); await asyncio.sleep(0.15)
-                assert await page.locator('#presets img').count()==0
+                assert await page.locator('#presets img:not(.thumb)').count()==0
+                await expect(page.locator('#presetState2')).to_have_text('<img src=x onerror=alert(1)>')
                 screenshot=os.getenv('CAMERA_TEST_SCREENSHOT')
                 if screenshot: await page.screenshot(path=screenshot,full_page=True)
                 await page.set_viewport_size({'width':390,'height':844})

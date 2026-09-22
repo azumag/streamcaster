@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]/'public'
 FAKE=r'''
 window.cameraTest={messages:[]};
-const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,autoCapture:true,udpError:null,photoAt:null,presets:{}};
+const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,autoCapture:true,awaitingPhoto:false,udpError:null,photoAt:null,presets:{}};
 window.WebSocket=class extends EventTarget {
  static OPEN=1;
  constructor(){super();this.readyState=1;cameraTest.socket=this;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
@@ -22,7 +22,7 @@ window.WebSocket=class extends EventTarget {
  if(m.op==='motion'){fixture.commandedPose=[10,2,20.2,0,0,0];fixture.sent++;}
  if(m.op==='save'){
   if(cameraTest.refuseSave){this.event({type:'error',message:'Need observed Zoom; move its slider in VRChat first'});return;}
-  fixture.presets[m.slot]={name:m.name,pose:fixture.observed.Pose,zoom:45};
+  fixture.presets[m.slot]={name:m.name,pose:fixture.observed.Pose,zoom:45,photo:'VRChat_shot_'+m.slot+'.png'};
   this.event({type:'accepted',op:'save'});
  }
  if(m.op==='capture'){fixture.photoAt=1758412345.5;this.event({type:'accepted',op:'capture'});}
@@ -62,7 +62,10 @@ async def main():
   await page.locator('#name1').fill('ステージ全景');await page.locator('[data-save="1"]').click()
   assert await page.locator('#presetState1').text_content()=='ステージ全景'
   await page.locator('#name2').fill('<img src=x onerror=alert(1)>');await page.locator('[data-save="2"]').click()
-  assert await page.locator('#presets img').count()==0
+  # Presets now hold real <img> thumbnails, so the XSS check is about the name:
+  # an injected tag must stay text and never become an element.
+  assert await page.locator('#presets img:not(.thumb)').count()==0
+  assert await page.locator('#presetState2').text_content()=='<img src=x onerror=alert(1)>'
   # Overwriting asks once; a refused save must not consume that confirmation,
   # or the operator is stuck re-confirming forever (as they were).
   await page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t=>t.remove())")
@@ -95,6 +98,18 @@ async def main():
   await page.locator('#autoCapture').uncheck()
   assert [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='autoCapture' and m['value'] is False]
   await page.locator('#autoCapture').check()
+  # Between the move and the file landing the preview still shows the old shot,
+  # so it has to say a new one is coming.
+  # A preset shows the framing it stored, not only its coordinates.
+  assert await page.locator('#presetPhoto1').get_attribute('src') == '/preset-photo/default/1/VRChat_shot_1.png'
+  assert await page.locator('#presetPhoto3').is_hidden()
+  assert await page.locator('#photoWait').is_hidden()
+  await page.evaluate("cameraTest.socket.fixture.awaitingPhoto=true")
+  await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
+  assert await page.locator('#photoWait').is_visible()
+  await page.evaluate("cameraTest.socket.fixture.awaitingPhoto=false")
+  await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
+  assert await page.locator('#photoWait').is_hidden()
   # After a restart VRChat has reported nothing, and change-only feedback means
   # it stays that way until the camera moves. Say so before 保存 is pressed.
   # Mutate the fixture itself, never a copy: the heartbeat replays the fixture

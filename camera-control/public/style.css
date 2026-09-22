@@ -1,5 +1,8 @@
 :root{color-scheme:dark;--bg:#0e141c;--panel:#18222f;--raise:#101c28;--line:#2f3f53;--text:#edf3f9;--muted:#a3b4c6;--accent:#64dec5;--go:#5fd6a4;--warn:#e9c48a;--bad:#c55c6c}
 *{box-sizing:border-box}
+/* An id selector outranks the UA's [hidden] rule, so #photo and #photoWait
+   stayed on screen while hidden. Make hidden mean hidden. */
+[hidden]{display:none !important}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
 header,main,footer{max-width:1320px;margin:auto;padding:20px 24px}
 header{display:flex;justify-content:space-between;align-items:center;gap:20px;padding-bottom:0}
@@ -50,7 +53,11 @@ select{margin-left:8px}
 .chips small{display:block;color:var(--muted);font-size:11px;letter-spacing:.06em}
 .chips strong{font-size:14px;font-weight:600}
 
-#photoBox{margin:0 0 12px}
+#photoBox{margin:0 0 12px;position:relative;min-height:190px}
+#photoWait{position:absolute;left:0;right:0;top:0;bottom:26px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border-radius:10px;background:rgba(8,13,19,.74);font-size:13px;letter-spacing:.06em}
+#photoWait::before{content:"";width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin 900ms linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){#photoWait::before{animation:none;border-top-color:var(--accent);opacity:.6}}
 #photo{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#080d13;border:1px solid var(--line);border-radius:10px}
 #photoState{margin-top:8px;font-size:13px;color:var(--muted)}
 
@@ -58,6 +65,7 @@ select{margin-left:8px}
 .preset{border:1px solid var(--line);border-radius:10px;padding:10px;min-width:0;background:var(--raise)}
 .preset strong{font-size:12px;letter-spacing:.08em;color:var(--muted)}
 .preset .name{font-size:14px;font-weight:600;margin:2px 0;overflow-wrap:anywhere}
+.preset .thumb{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:6px;border:1px solid var(--line);background:#080d13;margin:6px 0}
 .preset .stored{font-size:11px;margin:0 0 6px;min-height:16px;color:var(--muted);overflow-wrap:anywhere}
 .preset input{width:100%;margin:4px 0 6px;padding:6px 9px;font-size:13px}
 .preset .actions{gap:6px;flex-wrap:nowrap}
