@@ -1,5 +1,5 @@
 """Offline DOM smoke with a fake WebSocket; NOT a VRChat/network/browser integration test."""
-import asyncio, re, os, shutil
+import asyncio, json, re, os, shutil
 from pathlib import Path
 from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]/'public'
@@ -42,11 +42,17 @@ async def main():
   await page.set_content(html)
   await page.add_style_tag(path=str(ROOT/'style.css'))
   await page.evaluate("() => {" + FAKE + "}")
+  assert await page.locator('#arm').is_disabled(), '素のHTMLは何も操作できない'
   await page.add_script_tag(path=str(ROOT/'app.js'))
-  assert await page.locator('#arm').is_disabled()
-  await page.locator('#connect').click()
-  await page.locator('#claim').click()
+  # Opening the page is enough: it connects and takes control by itself, and
+  # never arms - claiming moves nothing, arming hands over the camera.
+  assert [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='claim']
+  assert not [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='arm']
+  assert await page.locator('#owner').text_content()=='あなたが操作中'
+  assert 'ARM' in await page.locator('#headline').text_content()
+  await page.locator('#settings summary').click()   # 常用しない設定は畳んである
   await page.locator('#mode').select_option('6')
+  await page.locator('#settings summary').click()
   await page.locator('#arm').click()
   await page.keyboard.down('KeyW');await page.wait_for_timeout(200);await page.keyboard.up('KeyW');await page.wait_for_timeout(100)
   msgs=await page.evaluate('cameraTest.messages')
@@ -84,18 +90,21 @@ async def main():
   assert (await page.locator('#photo').get_attribute('src')).endswith('/photo/1758412345500')
   # After a restart VRChat has reported nothing, and change-only feedback means
   # it stays that way until the camera moves. Say so before 保存 is pressed.
-  assert await page.locator('#presetReady').is_hidden()
-  await page.evaluate("cameraTest.socket.event({...cameraTest.socket.fixture, observed:{}})")
-  assert 'カメラを一度動かして' in await page.locator('#presetReady').text_content()
-  await page.evaluate("cameraTest.socket.event({...cameraTest.socket.fixture, observed:{Pose:[1,2,3,0,0,0]}})")
-  assert 'Zoom' in await page.locator('#presetReady').text_content()
-  await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
-  assert await page.locator('#presetReady').is_hidden()
+  # Mutate the fixture itself, never a copy: the heartbeat replays the fixture
+  # every 400 ms, so an injected one-off state is overwritten mid-assertion.
+  async def state(**changes):
+   for key, value in changes.items():
+    await page.evaluate(f"cameraTest.socket.fixture.{key}=" + json.dumps(value))
+   await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
+   return await page.locator('#headline').text_content()
+  assert '操作できます' in await state()
+  assert 'カメラを一度動かして' in await state(observed={})
+  assert 'Zoom' in await state(observed={'Pose':[1,2,3,0,0,0]})
+  assert '接触喪失' in await state(observed={'Pose':[1,2,3,0,0,0],'Zoom':45,'Mode':2}, contactLost=True)
   # 呼出 is greyed out until ARM; a disabled button explains nothing by itself.
-  await page.evaluate("cameraTest.socket.event({...cameraTest.socket.fixture, armed:false})")
-  assert 'ARM' in await page.locator('#presetReady').text_content()
+  assert 'ARM' in await state(contactLost=False, armed=False)
   assert await page.locator('[data-recall="1"]').is_disabled()
-  await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
+  assert '操作できます' in await state(armed=True)
   await page.locator('[data-recall="1"]').click()
   # Going to watch the camera in VRChat must not cancel the move it is making.
   before=len(await page.evaluate('cameraTest.messages'))
@@ -119,9 +128,13 @@ async def main():
   await page.wait_for_timeout(500)
   await page.locator('#setProfile').click()
   assert await page.locator('#profile').input_value()=='rehearsal-2'
+  # 切断 means stop, not "reconnect in three seconds".
   await page.locator('#disconnect').click()
   assert await page.locator('#claim').is_disabled()
+  await page.wait_for_timeout(200)
+  assert await page.locator('#connection').text_content()=='未接続'
+  assert '切断' in await page.locator('#headline').text_content()
   assert not errors,errors
-  print('PASS: offline Chromium DOM / UI controls / keyboard / release / presets / XSS / capture preview / STOP / responsive width / disconnect (mock WebSocket, not real browser network)')
+  print('PASS: offline Chromium DOM / auto-connect / UI controls / keyboard / release / presets / XSS / capture preview / STOP / responsive width / disconnect (mock WebSocket, not real browser network)')
   await browser.close()
 if __name__=='__main__': asyncio.run(main())

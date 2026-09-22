@@ -63,14 +63,16 @@ async def main():
                 page=await context.new_page(); errors=[]
                 page.on('pageerror',lambda exc:errors.append(str(exc)))
                 await page.goto(f'http://127.0.0.1:{config.port}')
-                assert await page.locator('#arm').is_disabled()
-                assert len(mock.messages)==0
-                await page.locator('#connect').click()
+                # Opening the page connects and claims; nothing is clicked here.
                 # Locator assertions, not wait_for_function: the app's own CSP
                 # (script-src 'self') blocks evaluating a string as JavaScript.
                 await expect(page.locator('#connection')).to_have_text('認証済み')
-                await page.locator('#claim').click()
                 await expect(page.locator('#owner')).to_have_text('あなたが操作中')
+                # Claiming must not move the camera, and must never arm it.
+                assert len(mock.messages)==0
+                assert not app[ENGINE].armed
+                await expect(page.locator('#arm')).to_be_enabled()
+                await page.locator('#settings summary').click()
                 await page.locator('#mode').select_option('6')
                 await asyncio.sleep(0.2)
                 assert mock.mode==6
@@ -97,11 +99,13 @@ async def main():
                 if screenshot: await page.screenshot(path=screenshot,full_page=True)
                 await page.set_viewport_size({'width':390,'height':844})
                 assert await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
-                await page.locator('#disconnect').click(); await asyncio.sleep(0.15)
+                # 切断 is deliberate: the page must not reconnect behind it.
+                await page.locator('#disconnect').click(); await asyncio.sleep(0.5)
                 assert app[ENGINE].owner is None
+                await expect(page.locator('#connection')).to_have_text('未接続')
                 assert not errors, errors
                 await browser.close()
-                print('PASS: Chromium auth, claim, mode, keyboard motion, release, presets, STOP, XSS text handling, mobile width, disconnect')
+                print('PASS: Chromium auto-connect, auto-claim, mode, keyboard motion, release, presets, STOP, XSS text handling, mobile width, disconnect')
         finally:
             feedback.cancel()
             with suppress(asyncio.CancelledError): await feedback

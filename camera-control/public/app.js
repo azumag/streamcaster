@@ -1,6 +1,10 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let ws = null, state = null, client = null, authenticated = false, wasMoving = false, photoAt = null, savingSlot = null, owned = false;
+let ws = null, state = null, client = null, authenticated = false, wasMoving = false;
+let photoAt = null, savingSlot = null, owned = false;
+// The page connects and claims by itself, but only until the operator says
+// otherwise: pressing 切断 means stop, not "try again in three seconds".
+let wanted = true, claimed = false, retry = null;
 const keys = new Set(), pointers = new Map();
 const mapping = {KeyA:[0,-1],KeyD:[0,1],KeyW:[1,1],KeyS:[1,-1],KeyE:[2,1],KeyQ:[2,-1],ArrowLeft:[3,-1],ArrowRight:[3,1],ArrowUp:[4,-1],ArrowDown:[4,1]};
 function own() { return authenticated && state && state.owner === client; }
@@ -18,11 +22,14 @@ function toast(message, kind = 'error') {
   setTimeout(() => item.remove(), kind === 'error' ? 8000 : 4000);
   notify(message);
 }
+function clearToasts(kind) {
+  document.querySelectorAll('#toasts .toast.' + kind).forEach(item => item.remove());
+}
 function showPhoto(at) {
   const img = $('photo');
   if (at === null || at === undefined) {
     photoAt = null; img.hidden = true; img.removeAttribute('src');
-    $('photoState').textContent = '写真なし（--photo-dir 未設定か、まだ保存されていません）';
+    $('photoState').textContent = '写真なし（保存フォルダ未設定か、まだ撮影されていません）';
     return;
   }
   if (at === photoAt) return;
@@ -32,9 +39,6 @@ function showPhoto(at) {
   img.src = '/photo/' + Math.round(at * 1000);
   img.hidden = false;
   $('photoState').textContent = '最新の写真 ' + new Date(at * 1000).toLocaleTimeString('ja-JP');
-}
-function clearToasts(kind) {
-  document.querySelectorAll('#toasts .toast.' + kind).forEach(item => item.remove());
 }
 function clearInput(stop = true) {
   keys.clear(); pointers.clear(); wasMoving = false;
@@ -50,6 +54,21 @@ function leaveControls() {
     send({op:'motion', axes:[0,0,0,0,0], speed:Number($('speed').value), turnSpeed:Number($('turn').value)});
   }
 }
+// One line answering "can I move the camera right now, and if not, what do I
+// do about it?" Every blocking condition says so before an operation is tried,
+// because a disabled button explains nothing to the person pressing it.
+function headline(s) {
+  if (!authenticated || !s) return ['wait', ws ? '接続しています…' : '切断しました。「接続」を押してください。'];
+  if (!own()) return ['warn', s.owner ? `${s.ownerName || '別の担当者'}が操作中です。`
+    : '操作権がありません。「操作権を取得」を押してください。'];
+  if (s.contactLost) return ['warn', '接触喪失：VRChat内でカメラを動かすと復帰します。'];
+  if (!s.observed.Pose) return ['warn', 'VRChat内でカメラを一度動かしてください（位置を未受信）。'];
+  if (s.observed.Zoom === undefined) return ['warn', 'VRChatでZoomスライダーを一度動かしてください（Zoomを未受信）。'];
+  if (!s.poseWriteEnabled) return ['warn', '位置操作は無効です。保存と撮影のみ使えます。'];
+  if (!s.armed) return ['warn', '「受信した位置でARM」を押すと移動・呼出ができます。保存と撮影は今でもできます。'];
+  if (s.transitioning) return ['go', 'プリセット移動中です。'];
+  return ['go', '操作できます。'];
+}
 function availability() {
   const owner = own(), armed = owner && state.armed;
   $('claim').disabled = !authenticated || (state && state.owner && !owner);
@@ -62,20 +81,25 @@ function availability() {
   document.querySelectorAll('[data-axis]').forEach(e => e.disabled = !armed);
   document.querySelectorAll('[data-recall]').forEach(e => e.disabled = !armed || !state.presets[e.dataset.recall]);
 }
+function showHeadline(s) {
+  const [level, text] = headline(s);
+  $('headline').className = 'headline ' + level;
+  $('headline').textContent = text;
+}
 function render(s) {
   state = s;
   if (owned && !own()) toast('操作権が外れました。「操作権を取得」を押し直してください。');
   owned = own();
-  if (!s.armed || !own()) { keys.clear(); pointers.clear(); wasMoving = false; }
+  showHeadline(s);
   $('owner').textContent = own() ? 'あなたが操作中'
     : s.owner ? `${s.ownerName || '別の担当者'}が操作中` : '空き';
   // Three different situations that all used to read as「未受信」.
-  $('feedback').textContent = s.contactLost ? '接触喪失（カメラを動かすと復帰）'
+  $('feedback').textContent = s.contactLost ? '接触喪失'
     : s.oscAge !== null ? `${s.oscAge.toFixed(1)}秒前`
-    : s.anyOscAge === null ? 'VRChatから受信なし（OSC設定と送信先ポートを確認）'
-    : 'カメラ値のみ未受信（カメラを開いて動かす）';
+    : s.anyOscAge === null ? 'VRChatから受信なし'
+    : 'カメラ値のみ未受信';
   $('armStatus').textContent = s.armed ? (s.transitioning ? 'プリセット移動中' : 'ARM済み') : '停止 / 未ARM';
-  $('poseWarning').textContent = s.poseWriteEnabled ? 'Pose書き込み試験モード。OSC受信は書き込み対応の証明ではありません。映像を見ながら少量ずつ確認してください。' : '位置操作は無効です。実機リハーサル時に --enable-pose-write で起動してください。';
+  $('poseWarning').textContent = s.poseWriteEnabled ? 'Pose書き込みは試験機能です。OSC受信は書き込み対応の証明ではありません。映像を見ながら少量ずつ確認してください。' : '位置操作は無効です。実機リハーサル時に --enable-pose-write で起動してください。';
   $('observed').textContent = JSON.stringify(s.observed, null, 2);
   $('requested').textContent = JSON.stringify({...s.requested, Pose:s.commandedPose}, null, 2);
   $('reason').textContent = `${s.reason} / UDP送信 ${s.sent} / 非対応・不正OSC ${s.invalidOsc}${s.udpError ? ' / UDPエラー: '+s.udpError : ''}`;
@@ -93,33 +117,26 @@ function render(s) {
       name.dataset.profile = s.profile;
     }
   }
-  // What保存 needs, said before it is pressed. VRChat reports position only
-  // when it changes, so after any restart the server has nothing to save and
-  // the operator has to nudge the camera once - which used to be discoverable
-  // only by pressing save and reading a refusal.
-  $('presetReady').textContent = s.contactLost
-    ? '接触喪失：VRChat内でカメラを動かすと復帰します。'
-    : !s.observed.Pose ? 'VRChat内でカメラを一度動かしてください（位置を未受信）。'
-    : s.observed.Zoom === undefined ? 'VRChatでZoomスライダーを一度動かしてください（Zoomを未受信）。'
-    : own() && !s.armed ? '呼出には先に「受信した位置でARM」を押してください（保存はこのままできます）。'
-    : '';
-  $('presetReady').hidden = !$('presetReady').textContent;
   showPhoto(s.photoAt);
   // Never fire change events or automatically resend controls from feedback.
   // Inputs represent operator intentions; observed values are shown separately.
   availability();
 }
-$('login').addEventListener('submit', event => {
-  event.preventDefault();
+function connect() {
   if (ws) return;
+  wanted = true; claimed = false;
+  clearTimeout(retry); retry = null;
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
-  $('connection').textContent = '接続中'; availability();
+  $('connection').textContent = '接続中';
+  showHeadline(null); availability();
   ws.addEventListener('message', event => {
     const data = JSON.parse(event.data);
     if (data.type === 'authenticated') {
       authenticated = true; client = data.client;
       $('connection').textContent = '認証済み'; $('operator').textContent = data.operator;
-      notify('操作権を取得してください。接続しただけではカメラを動かしません。');
+      // Claiming moves nothing: only ARM plus a deliberate input does. So the
+      // page takes control for you, and never arms for you.
+      if (!claimed) { claimed = true; send({op:'claim'}); }
     } else if (data.type === 'state') render(data);
     else if (data.type === 'error') toast(data.message);
     else if (data.type === 'accepted') {
@@ -140,12 +157,24 @@ $('login').addEventListener('submit', event => {
     clearInput(false); ws = null; authenticated = false; client = null; state = null; owned = false;
     $('gamepad').checked = false; $('connection').textContent = '未接続'; $('owner').textContent = '未取得';
     $('operator').textContent = '未接続';
-    $('armStatus').textContent = '停止 / 未ARM'; $('feedback').textContent = '接続切断（値は履歴）';
-    notify('接続が終了しました。自動再開はしません。必要に応じて再接続・操作権取得・ARMしてください。'); availability();
+    $('armStatus').textContent = '停止 / 未ARM'; $('feedback').textContent = '切断（値は履歴）';
+    // Reconnecting restores the connection and the claim, never the motion:
+    // the server disarms on disconnect and only a person can arm again.
+    if (wanted) {
+      notify('接続が切れました。3秒後に自動で接続し直します。ARMは解除されています。');
+      retry = setTimeout(connect, 3000);
+    } else {
+      notify('切断しました。自動再開はしません。');
+    }
+    showHeadline(null); availability();
   });
   ws.addEventListener('error', () => notify('接続失敗。Tailscale接続、grants/ACL、public-originとサーバーを確認してください。'));
-});
-$('disconnect').onclick = () => { clearInput(); if (ws) ws.close(); };
+}
+$('login').addEventListener('submit', event => { event.preventDefault(); connect(); });
+$('disconnect').onclick = () => {
+  wanted = false; clearTimeout(retry); retry = null;
+  clearInput(); if (ws) ws.close();
+};
 for (const op of ['claim','release','arm','stop']) $(op).onclick = () => { clearInput(false); send({op}); };
 $('capture').onclick = () => send({op:'capture'});
 $('photo').onerror = () => { $('photo').hidden = true; $('photoState').textContent = '写真を読み込めませんでした。'; };
@@ -202,9 +231,9 @@ setInterval(() => {
 for (let i = 1; i <= 8; i++) {
   const box = document.createElement('div'); box.className = 'preset';
   const title = document.createElement('strong'); title.textContent = `CAM ${i}`;
-  const status = document.createElement('p'); status.id = 'presetState'+i; status.textContent = '未保存'; status.className = 'muted';
+  const status = document.createElement('p'); status.id = 'presetState'+i; status.textContent = '未保存'; status.className = 'name';
+  const values = document.createElement('p'); values.id = 'presetValue'+i; values.className = 'stored';
   const name = document.createElement('input'); name.id = 'name'+i; name.maxLength = 48; name.value = `CAM ${i}`; name.setAttribute('aria-label',`CAM ${i} 保存名`);
-  const values = document.createElement('p'); values.id = 'presetValue'+i; values.className = 'muted stored';
   const actions = document.createElement('div'); actions.className = 'actions';
   const recall = document.createElement('button'); recall.textContent = '呼出'; recall.dataset.recall = String(i); recall.disabled = true;
   recall.onclick = () => { clearInput(false); send({op:'recall',slot:String(i),duration:Number($('duration').value)}); };
@@ -221,3 +250,4 @@ for (let i = 1; i <= 8; i++) {
   actions.append(recall,save); box.append(title,status,values,name,actions); $('presets').append(box);
 }
 availability();
+connect();
