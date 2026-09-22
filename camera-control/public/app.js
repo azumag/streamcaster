@@ -40,6 +40,16 @@ function clearInput(stop = true) {
   keys.clear(); pointers.clear(); wasMoving = false;
   if (stop && own()) send({op:'stop'});
 }
+function leaveControls() {
+  // Leaving this page drops held keys - a keyup never arrives once the window
+  // is gone - but it must NOT cancel a preset move. Watching the camera means
+  // looking at VRChat, and a full STOP here froze the shot mid-transition and
+  // disarmed, exactly when the operator went to watch it land.
+  keys.clear(); pointers.clear(); wasMoving = false;
+  if (own() && state.armed) {
+    send({op:'motion', axes:[0,0,0,0,0], speed:Number($('speed').value), turnSpeed:Number($('turn').value)});
+  }
+}
 function availability() {
   const owner = own(), armed = owner && state.armed;
   $('claim').disabled = !authenticated || (state && state.owner && !owner);
@@ -161,10 +171,10 @@ window.addEventListener('keydown', event => {
   if (mapping[event.code]) { event.preventDefault(); keys.add(event.code); }
 });
 window.addEventListener('keyup', event => keys.delete(event.code));
-window.addEventListener('blur', () => clearInput());
+window.addEventListener('blur', () => leaveControls());
 window.addEventListener('pagehide', () => clearInput());
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearInput();
+  if (document.hidden) leaveControls();
   else if (own()) send({op:'heartbeat'});  // back from VRChat: reassert at once
 });
 // Clicks on touch controls use pointer capture; focus leaving the document stops.

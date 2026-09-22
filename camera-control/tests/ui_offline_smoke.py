@@ -96,7 +96,14 @@ async def main():
   assert 'ARM' in await page.locator('#presetReady').text_content()
   assert await page.locator('[data-recall="1"]').is_disabled()
   await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
-  await page.locator('[data-recall="1"]').click();await page.locator('#stop').click()
+  await page.locator('[data-recall="1"]').click()
+  # Going to watch the camera in VRChat must not cancel the move it is making.
+  before=len(await page.evaluate('cameraTest.messages'))
+  await page.evaluate("window.dispatchEvent(new Event('blur'))")
+  since=(await page.evaluate('cameraTest.messages'))[before:]
+  assert not [m for m in since if m.get('op')=='stop'], since
+  assert [m for m in since if m.get('op')=='motion' and not any(m['axes'])], since
+  await page.locator('#stop').click()
   assert await page.locator('[data-axis]').first.is_disabled()
   # Remove the deliberate XSS fixture from the presentation screenshot.
   await page.locator('#name2').fill('演者アップ');await page.locator('[data-save="2"]').click();await page.locator('[data-save="2"]').click()
