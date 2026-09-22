@@ -74,6 +74,7 @@ select{margin-left:8px}
 [data-axis]{touch-action:none;user-select:none}
 .sliders{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 .check{margin-top:14px}
+.preview .check{margin:12px 0 0;font-size:13px;color:var(--muted)}
 
 details.panel summary{cursor:pointer;font-size:15px;font-weight:600;color:var(--muted)}
 details.panel[open] summary{margin-bottom:14px}

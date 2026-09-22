@@ -77,7 +77,7 @@ function availability() {
   $('stop').disabled = !authenticated;
   $('disconnect').disabled = !ws;
   $('connect').disabled = !!ws;
-  document.querySelectorAll('[data-setting],#profile,#setProfile,[data-save],#capture').forEach(e => e.disabled = !owner);
+  document.querySelectorAll('[data-setting],#profile,#setProfile,[data-save],#capture,#autoCapture').forEach(e => e.disabled = !owner);
   document.querySelectorAll('[data-axis]').forEach(e => e.disabled = !armed);
   document.querySelectorAll('[data-recall]').forEach(e => e.disabled = !armed || !state.presets[e.dataset.recall]);
 }
@@ -117,6 +117,7 @@ function render(s) {
       name.dataset.profile = s.profile;
     }
   }
+  if (document.activeElement !== $('autoCapture')) $('autoCapture').checked = s.autoCapture;
   showPhoto(s.photoAt);
   // Never fire change events or automatically resend controls from feedback.
   // Inputs represent operator intentions; observed values are shown separately.
@@ -177,6 +178,7 @@ $('disconnect').onclick = () => {
 };
 for (const op of ['claim','release','arm','stop']) $(op).onclick = () => { clearInput(false); send({op}); };
 $('capture').onclick = () => send({op:'capture'});
+$('autoCapture').onchange = () => send({op:'autoCapture',value:$('autoCapture').checked});
 $('photo').onerror = () => { $('photo').hidden = true; $('photoState').textContent = '写真を読み込めませんでした。'; };
 $('setProfile').onclick = () => { clearInput(); send({op:'profile',value:$('profile').value}); };
 document.querySelectorAll('[data-setting]').forEach(el => {

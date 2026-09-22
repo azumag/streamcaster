@@ -309,6 +309,45 @@ class EngineTests(unittest.TestCase):
         engine.dispatch('b',{'op':'claim'})
         engine.dispatch('b',{'op':'capture'})
         self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_a_finished_move_photographs_where_the_camera_landed(self):
+        self.store.put('default','1',{'name':'stage','pose':[20,2,20,0,0,0],'zoom':85})
+        self.command(op='recall',slot='1',duration=0)
+        self.step()                       # the CUT lands
+        self.sent.clear()
+        self.idle(0.5)
+        self.assertEqual(self.sent,[])    # not yet: let the camera settle first
+        self.idle(0.6)
+        self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_a_camera_that_starts_moving_again_is_not_photographed_mid_flight(self):
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.command(op='motion',axes=[0]*5); self.step()
+        self.sent.clear()
+        self.idle(0.4)
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()   # off again
+        self.idle(1.0)
+        self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_the_confirmation_shot_can_be_turned_off(self):
+        self.command(op='autoCapture',value=False)
+        self.assertFalse(self.engine.state()['autoCapture'])
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.command(op='motion',axes=[0]*5); self.step()
+        self.sent.clear()
+        self.idle(1.5)
+        self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+        with self.assertRaises(ValueError): self.command(op='autoCapture',value='yes')
+    def test_stopping_or_losing_contact_takes_no_photo(self):
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.command(op='stop')           # emergency stop disarms; nothing to confirm
+        self.sent.clear()
+        self.idle(1.5)
+        self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+        self.command(op='arm')
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.command(op='motion',axes=[0]*5); self.step()
+        self.engine.contact_lost=True
+        self.sent.clear()
+        self.idle(1.5)
+        self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
     def test_bad_feedback_types(self):
         with self.assertRaises(ValueError): self.engine.receive('/usercamera/Pose',[1]*6,'iiiiii')
         with self.assertRaises(ValueError): self.engine.receive('/usercamera/Zoom',[45],'i')

@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]/'public'
 FAKE=r'''
 window.cameraTest={messages:[]};
-const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,udpError:null,photoAt:null,presets:{}};
+const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,autoCapture:true,udpError:null,photoAt:null,presets:{}};
 window.WebSocket=class extends EventTarget {
  static OPEN=1;
  constructor(){super();this.readyState=1;cameraTest.socket=this;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
@@ -26,6 +26,7 @@ window.WebSocket=class extends EventTarget {
   this.event({type:'accepted',op:'save'});
  }
  if(m.op==='capture'){fixture.photoAt=1758412345.5;this.event({type:'accepted',op:'capture'});}
+ if(m.op==='autoCapture')fixture.autoCapture=m.value;
  if(m.op==='recall')fixture.transitioning=true;
  this.event(fixture);
  }
@@ -88,6 +89,12 @@ async def main():
   await page.locator('#capture').click()
   assert [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='capture']
   assert (await page.locator('#photo').get_attribute('src')).endswith('/photo/1758412345500')
+  # The confirmation shot is the operator's to switch off: it writes a file to
+  # their disk every time the camera comes to rest.
+  assert await page.locator('#autoCapture').is_checked()
+  await page.locator('#autoCapture').uncheck()
+  assert [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='autoCapture' and m['value'] is False]
+  await page.locator('#autoCapture').check()
   # After a restart VRChat has reported nothing, and change-only feedback means
   # it stays that way until the camera moves. Say so before 保存 is pressed.
   # Mutate the fixture itself, never a copy: the heartbeat replays the fixture

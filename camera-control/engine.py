@@ -27,6 +27,9 @@ LEASE_SECONDS = 60.0
 INPUT_SECONDS = 0.4
 POSE_SECONDS = 5.0
 CAPTURE_SECONDS = 1.0
+# Wait for the camera to be properly at rest before the confirmation shot, so
+# the picture shows where it stopped rather than where it was still going.
+SETTLE_SECONDS = 0.8
 
 
 def number(value, low, high):
@@ -154,11 +157,22 @@ class Engine:
         self.move_at = 0.0
         self.contact_lost = False
         self.capture_at = None
+        self.auto_capture = True
+        self.settle_at = None
+        self.was_moving = False
 
     def emit(self, name, values, types):
         # No browser-provided endpoint, host, port, file path or /input controls.
         self.send('/usercamera/' + name, values, types)
         self.sent += 1
+
+    def capture(self, now):
+        """Ask VRChat for a photo. False when the shutter is still cooling off."""
+        if self.capture_at is not None and now - self.capture_at < CAPTURE_SECONDS:
+            return False
+        self.capture_at = now
+        self.emit('Capture', [True], 'T')
+        return True
 
     def moving(self):
         return self.transition is not None or any(self.axes) or any(self.velocity)
@@ -329,10 +343,14 @@ class Engine:
             # name. We only ever read the newest one back, never a named path.
             if self.observed.get('Mode') == 0:
                 raise ValueError('Open the VRChat camera first')
-            if self.capture_at is not None and now - self.capture_at < CAPTURE_SECONDS:
+            if not self.capture(now):
                 raise ValueError('Capture again in a moment')
-            self.capture_at = now
-            self.emit('Capture', [True], 'T')
+        elif op == 'autoCapture':
+            if type(msg.get('value')) is not bool:
+                raise ValueError('A boolean is required')
+            self.auto_capture = msg['value']
+            if not self.auto_capture:
+                self.settle_at = None
         elif op == 'save':
             # Save what VRChat last reported. Feedback is change-only, so a still
             # camera goes quiet within seconds and demanding fresh feedback here
@@ -377,7 +395,22 @@ class Engine:
         if self.owner is not None and now - self.lease_at > LEASE_SECONDS:
             self.release(self.owner)
         if not self.armed:
+            self.settle_at, self.was_moving = None, False
             return
+        # The operator cannot see the camera, so "did it actually get there?"
+        # has no answer once a move ends. Take one photo when it comes to rest,
+        # and drop it if the camera starts moving again: a picture of the way
+        # there confirms nothing. Starting a new move cancels the pending shot.
+        moving = self.moving()
+        if moving:
+            self.settle_at = None
+        elif self.was_moving and self.auto_capture:
+            self.settle_at = now + SETTLE_SECONDS
+        self.was_moving = moving
+        if self.settle_at is not None and now >= self.settle_at:
+            self.settle_at = None
+            if not self.contact_lost and self.observed.get('Mode') != 0:
+                self.capture(now)
         # VRChat only emits Pose when it changes, so an idle camera always goes
         # quiet: silence alone never disarms. Once we move, VRChat echoes our own
         # writes, so continued silence means we lost contact. Measure from the
@@ -441,6 +474,7 @@ class Engine:
             'reason': self.reason, 'sent': self.sent, 'invalidOsc': self.invalid_osc,
             'contactLost': self.contact_lost,
             'captureAge': None if self.capture_at is None else round(now - self.capture_at, 2),
+            'autoCapture': self.auto_capture,
             'udpError': self.udp_error,
             'presets': self.presets.data.get(self.profile, {}),
         }
