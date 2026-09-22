@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]/'public'
 FAKE=r'''
 window.cameraTest={messages:[]};
-const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,autoCapture:true,awaitingPhoto:false,udpError:null,photoAt:null,presets:{}};
+const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,autoCapture:true,awaitingPhoto:false,moving:false,udpError:null,photoAt:null,presets:{}};
 window.WebSocket=class extends EventTarget {
  static OPEN=1;
  constructor(){super();this.readyState=1;cameraTest.socket=this;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
@@ -16,7 +16,7 @@ window.WebSocket=class extends EventTarget {
  if(m.op==='claim')fixture.owner='offline';
  if(m.op==='release')fixture.owner=null;
  if(m.op==='arm')fixture.armed=true;
- if(m.op==='stop'){fixture.armed=false;fixture.transitioning=false;}
+ if(m.op==='stop'){fixture.armed=false;fixture.transitioning=false;fixture.moving=false;}
  if(m.op==='profile'){fixture.profile=m.value;fixture.armed=false;}
  if(m.op==='set'){fixture.requested[m.name]=m.value;fixture.sent++;}
  if(m.op==='motion'){fixture.commandedPose=[10,2,20.2,0,0,0];fixture.sent++;}
@@ -27,7 +27,7 @@ window.WebSocket=class extends EventTarget {
  }
  if(m.op==='capture'){fixture.photoAt=1758412345.5;this.event({type:'accepted',op:'capture'});}
  if(m.op==='autoCapture')fixture.autoCapture=m.value;
- if(m.op==='recall')fixture.transitioning=true;
+ if(m.op==='recall'){fixture.transitioning=true;fixture.moving=true;}
  this.event(fixture);
  }
  close(){this.readyState=3;this.dispatchEvent(new CloseEvent('close'));}
@@ -51,6 +51,13 @@ async def main():
   assert not [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='arm']
   assert await page.locator('#owner').text_content()=='あなたが操作中'
   assert 'ARM' in await page.locator('#headline').text_content()
+  # Mutate the fixture itself, never a copy: the heartbeat replays the fixture
+  # every 400 ms, so an injected one-off state is overwritten mid-assertion.
+  async def state(**changes):
+   for key, value in changes.items():
+    await page.evaluate(f"cameraTest.socket.fixture.{key}=" + json.dumps(value))
+   await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
+   return await page.locator('#headline').text_content()
   await page.locator('#settings summary').click()   # 常用しない設定は畳んである
   await page.locator('#mode').select_option('6')
   await page.locator('#settings summary').click()
@@ -104,21 +111,17 @@ async def main():
   assert await page.locator('#presetPhoto1').get_attribute('src') == '/preset-photo/default/1/VRChat_shot_1.png'
   assert await page.locator('#presetPhoto3').is_hidden()
   assert await page.locator('#photoWait').is_hidden()
-  await page.evaluate("cameraTest.socket.fixture.awaitingPhoto=true")
-  await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
+  # A move on its way, then the photo of where it landed: the preview says which.
+  await state(moving=True)
+  assert '移動中' in await page.locator('#photoWait').text_content()
   assert await page.locator('#photoWait').is_visible()
-  await page.evaluate("cameraTest.socket.fixture.awaitingPhoto=false")
-  await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
+  await state(moving=False, awaitingPhoto=True)
+  assert '撮影中' in await page.locator('#photoWait').text_content()
+  assert await page.locator('#photoWait').is_visible()
+  await state(awaitingPhoto=False)
   assert await page.locator('#photoWait').is_hidden()
   # After a restart VRChat has reported nothing, and change-only feedback means
   # it stays that way until the camera moves. Say so before 保存 is pressed.
-  # Mutate the fixture itself, never a copy: the heartbeat replays the fixture
-  # every 400 ms, so an injected one-off state is overwritten mid-assertion.
-  async def state(**changes):
-   for key, value in changes.items():
-    await page.evaluate(f"cameraTest.socket.fixture.{key}=" + json.dumps(value))
-   await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
-   return await page.locator('#headline').text_content()
   assert '操作できます' in await state()
   assert 'カメラを一度動かして' in await state(observed={})
   assert 'Zoom' in await state(observed={'Pose':[1,2,3,0,0,0]})

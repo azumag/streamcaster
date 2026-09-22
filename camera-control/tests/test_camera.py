@@ -348,6 +348,17 @@ class EngineTests(unittest.TestCase):
         self.sent.clear()
         self.idle(1.5)
         self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_state_says_the_camera_is_on_its_way(self):
+        # The preview only ever holds the last photo, so the UI has to know that
+        # what it is showing is not where the camera is going.
+        self.store.put('default','1',{'name':'stage','pose':[20,2,20,0,0,0],'zoom':85})
+        self.assertFalse(self.engine.state()['moving'])
+        self.command(op='recall',slot='1',duration=2.5)
+        self.assertTrue(self.engine.state()['moving'])
+        self.idle(3)
+        self.assertFalse(self.engine.state()['moving'])
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.assertTrue(self.engine.state()['moving'])
     def test_saving_a_preset_photographs_the_shot_it_stored(self):
         self.command(op='save',slot='1',name='CAM 1')
         self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)

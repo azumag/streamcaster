@@ -129,9 +129,12 @@ function render(s) {
     }
   }
   if (document.activeElement !== $('autoCapture')) $('autoCapture').checked = s.autoCapture;
-  // The preview keeps showing the previous shot until the new file lands, so
-  // say a photo is on its way rather than letting a stale frame read as fresh.
-  $('photoWait').hidden = !s.awaitingPhoto;
+  // The picture on screen is only ever the last one taken. While the camera is
+  // on its way, and until the new file lands, say so - a stale frame otherwise
+  // reads as the shot that was just asked for.
+  const pending = s.moving ? '移動中…' : s.awaitingPhoto ? '撮影中…' : '';
+  $('photoWait').textContent = pending;
+  $('photoWait').hidden = !pending;
   showPhoto(s.photoAt);
   // Never fire change events or automatically resend controls from feedback.
   // Inputs represent operator intentions; observed values are shown separately.

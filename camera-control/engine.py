@@ -495,6 +495,7 @@ class Engine:
             'poseWriteEnabled': self.enable_pose, 'profile': self.profile,
             'observed': self.observed, 'requested': self.requested,
             'commandedPose': self.pose, 'transitioning': self.transition is not None,
+            'moving': self.moving(),
             'oscAge': None if self.last_osc_at is None else round(now - self.last_osc_at, 2),
             'anyOscAge': None if self.any_osc_at is None else round(now - self.any_osc_at, 2),
             'poseAge': None if self.pose_at is None else round(now - self.pose_at, 2),
