@@ -96,12 +96,21 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.command(op='set',name='Zoom',value=50)
         self.assertIsNone(self.engine.owner)
         self.assertFalse(self.sent)
-    def test_new_owner_never_inherits_motion(self):
-        self.command(op='motion',axes=[1,0,0,0,0])
+    def test_a_new_owner_inherits_the_arm_but_never_the_motion(self):
+        # Handing over should not cost the next operator an ARM: the camera's
+        # position is known regardless of who is driving. Motion does not cross.
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
         self.now += 61
         self.engine.dispatch('b',{'op':'claim'})
-        self.assertFalse(self.engine.armed)
+        self.assertTrue(self.engine.armed)
         self.assertEqual(self.engine.axes,[0]*5)
+        self.assertEqual(self.engine.velocity,[0]*5)
+        self.assertIsNone(self.engine.transition)
+        count=len(self.sent); self.now += 1/30; self.engine.tick(1/30)
+        self.assertEqual(len(self.sent),count)   # nothing moves until b asks
+        self.engine.dispatch('b',{'op':'motion','axes':[1,0,0,0,0]})
+        self.step()
+        self.assertGreater(len(self.sent),count)
     def test_motion_is_smoothed_and_world_relative(self):
         self.engine.receive('/usercamera/Pose',[10,2,20,0,90,0],'ffffff')
         self.command(op='motion',axes=[0,1,0,0,0],speed=1)
@@ -119,9 +128,14 @@ class EngineTests(unittest.TestCase):
         count=len(self.sent); self.now += 0.5; self.engine.tick(1/30)
         self.assertEqual(len(self.sent),count)
         self.assertEqual(self.engine.velocity,[0]*5)
-    def test_disconnect_disarms(self):
-        self.engine.release('a'); self.assertIsNone(self.engine.owner)
-        self.assertFalse(self.engine.armed)
+    def test_disconnect_stops_the_camera_and_keeps_the_known_position(self):
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.engine.release('a')
+        self.assertIsNone(self.engine.owner)
+        self.assertEqual(self.engine.velocity,[0]*5)
+        self.assertTrue(self.engine.armed)
+        # An unowned engine cannot be moved by anyone; control comes first.
+        with self.assertRaises(ValueError): self.command(op='motion',axes=[1,0,0,0,0])
     def test_stalled_loop_disarms(self):
         self.command(op='motion',axes=[1,0,0,0,0]); self.step(0.3)
         self.assertFalse(self.engine.armed); self.assertFalse(self.sent)
@@ -558,7 +572,9 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((address,types),('/usercamera/Pose','ffffff')); self.assertGreater(values[0],10)
         await asyncio.sleep(0.55); count=self.app[ENGINE].sent; await asyncio.sleep(0.12)
         self.assertEqual(self.app[ENGINE].sent,count)
-        await ws.close(); await asyncio.sleep(0.02); self.assertFalse(self.app[ENGINE].armed)
+        await ws.close(); await asyncio.sleep(0.02)
+        self.assertIsNone(self.app[ENGINE].owner)
+        self.assertEqual(self.app[ENGINE].velocity,[0]*5)
     async def test_invalid_json_and_unknown_commands_do_not_emit(self):
         ws=await self.connect(); await ws.send_json({'op':'claim'}); await self.until(ws,'accepted')
         for raw in ['[]','{"op":"exec","command":"ignored"}','{"op":"set","name":"Zoom","value":NaN}']:

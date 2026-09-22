@@ -240,7 +240,11 @@ class Engine:
 
     def release(self, client):
         if self.owner == client:
-            self.stop('Operator released / disconnected')
+            # Leaving stops the camera but does not un-know where it is. ARM
+            # means "this position is known", which has nothing to do with who
+            # is driving, so the next operator does not re-arm for a tab that
+            # was closed. Motion never carries over: every move resyncs first.
+            self.stop('Operator released / disconnected', disarm=False)
             self.owner = None
 
     def note_traffic(self):
@@ -290,7 +294,8 @@ class Engine:
             if self.owner is not None and self.owner != client and now - self.lease_at <= LEASE_SECONDS:
                 raise ValueError('Another operator holds control')
             if self.owner != client:
-                self.stop('Control acquired; arm from feedback')
+                self.stop('Control acquired' if self.armed else 'Control acquired; arm from feedback',
+                          disarm=False)
             self.owner, self.lease_at = client, now
             return
         if self.owner != client or now - self.lease_at > LEASE_SECONDS:
