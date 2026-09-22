@@ -290,12 +290,18 @@ class Engine:
         if op == 'stop':  # Every authenticated observer may stop motion.
             self.stop('Emergency STOP')
             return
-        if op == 'claim':
-            if self.owner is not None and self.owner != client and now - self.lease_at <= LEASE_SECONDS:
+        if op in ('claim', 'takeover'):
+            # Claiming is polite and fails against a live operator, because the
+            # page claims by itself on load and opening a tab must never take
+            # the camera from whoever is driving. Taking it over is the explicit
+            # act for when it has to happen anyway, and it is logged as one.
+            if op == 'claim' and self.owner is not None and self.owner != client                     and now - self.lease_at <= LEASE_SECONDS:
                 raise ValueError('Another operator holds control')
             if self.owner != client:
-                self.stop('Control acquired' if self.armed else 'Control acquired; arm from feedback',
-                          disarm=False)
+                taken = op == 'takeover' and self.owner is not None
+                self.stop('Control taken over' if taken
+                          else 'Control acquired' if self.armed
+                          else 'Control acquired; arm from feedback', disarm=False)
             self.owner, self.lease_at = client, now
             return
         if self.owner != client or now - self.lease_at > LEASE_SECONDS:

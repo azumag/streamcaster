@@ -72,6 +72,8 @@ function headline(s) {
 function availability() {
   const owner = own(), armed = owner && state.armed;
   $('claim').disabled = !authenticated || (state && state.owner && !owner);
+  // Only offered while somebody else is actually driving.
+  $('takeover').disabled = !authenticated || !state || !state.owner || owner;
   $('release').disabled = !owner;
   $('arm').disabled = !owner || !state.poseWriteEnabled;
   $('stop').disabled = !authenticated;
@@ -88,7 +90,10 @@ function showHeadline(s) {
 }
 function render(s) {
   state = s;
-  if (owned && !own()) toast('操作権が外れました。「操作権を取得」を押し直してください。');
+  if (owned && !own()) {
+    toast(s.owner ? `${s.ownerName || '別の担当者'}に操作権を奪われました。`
+                  : '操作権が外れました。「操作権を取得」を押し直してください。');
+  }
   owned = own();
   showHeadline(s);
   $('owner').textContent = own() ? 'あなたが操作中'
@@ -201,6 +206,19 @@ $('disconnect').onclick = () => {
   clearInput(); if (ws) ws.close();
 };
 for (const op of ['claim','release','arm','stop']) $(op).onclick = () => { clearInput(false); send({op}); };
+$('takeover').onclick = () => {
+  // Same deliberate second press as overwriting a preset: this pulls a live
+  // camera out of someone else's hands, so it is never one stray click.
+  const button = $('takeover');
+  if (Date.now() > Number(button.dataset.confirmUntil || 0)) {
+    button.dataset.confirmUntil = String(Date.now() + 5000);
+    toast(`${(state && state.ownerName) || '別の担当者'}から操作権を奪うには、5秒以内にもう一度押してください。`, 'notice');
+    return;
+  }
+  button.dataset.confirmUntil = '0';
+  clearInput(false);
+  send({op:'takeover'});
+};
 $('capture').onclick = () => send({op:'capture'});
 $('autoCapture').onchange = () => send({op:'autoCapture',value:$('autoCapture').checked});
 $('photo').onerror = () => { $('photo').hidden = true; $('photoState').textContent = '写真を読み込めませんでした。'; };

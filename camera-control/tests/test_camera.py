@@ -88,6 +88,23 @@ class EngineTests(unittest.TestCase):
     def test_lease_is_exclusive(self):
         with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'claim'})
         with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'set','name':'Mode','value':2})
+    def test_control_can_be_taken_from_a_live_operator(self):
+        # Claiming stays polite - the page claims on load, so opening a tab
+        # must not steal the camera - while taking over is explicit.
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'claim'})
+        self.engine.dispatch('b',{'op':'takeover'})
+        self.assertEqual(self.engine.owner,'b')
+        self.assertEqual(self.engine.reason,'Control taken over')
+        self.assertTrue(self.engine.armed)          # the position is still known
+        self.assertEqual(self.engine.axes,[0]*5)    # the motion is not inherited
+        self.assertEqual(self.engine.velocity,[0]*5)
+        with self.assertRaises(ValueError): self.command(op='motion',axes=[1,0,0,0,0])
+    def test_taking_over_an_idle_camera_is_an_ordinary_claim(self):
+        self.engine.release('a')
+        self.engine.dispatch('b',{'op':'takeover'})
+        self.assertEqual(self.engine.owner,'b')
+        self.assertNotEqual(self.engine.reason,'Control taken over')
     def test_any_authenticated_operator_can_stop(self):
         self.engine.dispatch('b',{'op':'stop'})
         self.assertFalse(self.engine.armed)

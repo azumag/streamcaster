@@ -13,7 +13,7 @@ window.WebSocket=class extends EventTarget {
  get fixture(){return fixture;}
  event(data){this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify(data)}));}
  send(raw){const m=JSON.parse(raw);cameraTest.messages.push(m);
- if(m.op==='claim')fixture.owner='offline';
+ if(m.op==='claim'||m.op==='takeover'){fixture.owner='offline';fixture.ownerName='localhost';}
  if(m.op==='release')fixture.owner=null;
  if(m.op==='arm')fixture.armed=true;
  if(m.op==='stop'){fixture.armed=false;fixture.transitioning=false;fixture.moving=false;fixture.recallSlot=null;}
@@ -111,6 +111,20 @@ async def main():
   assert await page.locator('#presetPhoto1').get_attribute('src') == '/preset-photo/default/1/VRChat_shot_1.png'
   assert await page.locator('#presetPhoto3').is_hidden()
   assert await page.locator('#photoWait').is_hidden()
+  # Someone else driving: claiming is closed, taking over is offered, and it
+  # takes two presses because it pulls a live camera out of their hands.
+  await state(owner='another-operator', ownerName='別の担当者')
+  assert await page.locator('#claim').is_disabled()
+  assert await page.locator('#takeover').is_enabled()
+  await page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t=>t.remove())")
+  await page.locator('#takeover').click()
+  assert await page.locator('#toasts .toast.notice').count()==1
+  assert not [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='takeover']
+  await page.locator('#takeover').click()
+  assert [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='takeover']
+  assert await page.locator('#owner').text_content()=='あなたが操作中'
+  assert await page.locator('#takeover').is_disabled()
+  await page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t=>t.remove())")
   # The operator watches the button they pressed, so it says what it is doing.
   await state(moving=True, recallSlot='1')
   assert await page.locator('[data-recall="1"]').text_content()=='移動中…'
