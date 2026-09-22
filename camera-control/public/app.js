@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let ws = null, state = null, client = null, authenticated = false, wasMoving = false, photoAt = null;
+let ws = null, state = null, client = null, authenticated = false, wasMoving = false, photoAt = null, savingSlot = null, owned = false;
 const keys = new Set(), pointers = new Map();
 const mapping = {KeyA:[0,-1],KeyD:[0,1],KeyW:[1,1],KeyS:[1,-1],KeyE:[2,1],KeyQ:[2,-1],ArrowLeft:[3,-1],ArrowRight:[3,1],ArrowUp:[4,-1],ArrowDown:[4,1]};
 function own() { return authenticated && state && state.owner === client; }
@@ -33,6 +33,9 @@ function showPhoto(at) {
   img.hidden = false;
   $('photoState').textContent = '最新の写真 ' + new Date(at * 1000).toLocaleTimeString('ja-JP');
 }
+function clearToasts(kind) {
+  document.querySelectorAll('#toasts .toast.' + kind).forEach(item => item.remove());
+}
 function clearInput(stop = true) {
   keys.clear(); pointers.clear(); wasMoving = false;
   if (stop && own()) send({op:'stop'});
@@ -51,6 +54,8 @@ function availability() {
 }
 function render(s) {
   state = s;
+  if (owned && !own()) toast('操作権が外れました。「操作権を取得」を押し直してください。');
+  owned = own();
   if (!s.armed || !own()) { keys.clear(); pointers.clear(); wasMoving = false; }
   $('owner').textContent = own() ? 'あなたが操作中'
     : s.owner ? `${s.ownerName || '別の担当者'}が操作中` : '空き';
@@ -70,6 +75,9 @@ function render(s) {
   for (let i = 1; i <= 8; i++) {
     const saved = s.presets[String(i)], name = $('name'+i);
     $('presetState'+i).textContent = saved ? saved.name : '未保存';
+    $('presetValue'+i).textContent = saved
+      ? `Zoom ${saved.zoom.toFixed(1)} / x ${saved.pose[0].toFixed(2)} y ${saved.pose[1].toFixed(2)} z ${saved.pose[2].toFixed(2)}`
+      : '';
     if (document.activeElement !== name && name.dataset.profile !== s.profile) {
       name.value = saved ? saved.name : `CAM ${i}`;
       name.dataset.profile = s.profile;
@@ -96,13 +104,19 @@ $('login').addEventListener('submit', event => {
     else if (data.type === 'accepted') {
       // A refused save must not consume the overwrite confirmation, so only a
       // server-side acceptance clears it.
-      if (data.op === 'save') document.querySelectorAll('[data-save]').forEach(b => b.dataset.confirmUntil = '0');
+      if (data.op === 'save') {
+        document.querySelectorAll('[data-save]').forEach(b => b.dataset.confirmUntil = '0');
+        // Overwriting a preset with the same name changes nothing on screen, so
+        // without this a stored save is indistinguishable from a refused one.
+        clearToasts('notice');
+        toast(`CAM ${savingSlot} に保存しました。`, 'ok');
+      }
       if (data.op === 'capture') $('photoState').textContent = '撮影を指示しました。保存され次第更新します。';
       notify(`受付: ${data.op}（VRChatへの適用はOSC受信値・映像で確認）`);
     }
   });
   ws.addEventListener('close', () => {
-    clearInput(false); ws = null; authenticated = false; client = null; state = null;
+    clearInput(false); ws = null; authenticated = false; client = null; state = null; owned = false;
     $('gamepad').checked = false; $('connection').textContent = '未接続'; $('owner').textContent = '未取得';
     $('operator').textContent = '未接続';
     $('armStatus').textContent = '停止 / 未ARM'; $('feedback').textContent = '接続切断（値は履歴）';
@@ -138,9 +152,14 @@ window.addEventListener('keydown', event => {
 window.addEventListener('keyup', event => keys.delete(event.code));
 window.addEventListener('blur', () => clearInput());
 window.addEventListener('pagehide', () => clearInput());
-document.addEventListener('visibilitychange', () => { if (document.hidden) clearInput(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clearInput();
+  else if (own()) send({op:'heartbeat'});  // back from VRChat: reassert at once
+});
 // Clicks on touch controls use pointer capture; focus leaving the document stops.
-setInterval(() => { if (own() && !document.hidden) send({op:'heartbeat'}); }, 400);
+// Keep the claim alive even while hidden. Browsers throttle this to roughly
+// once a minute in a background tab, which the server's lease now tolerates.
+setInterval(() => { if (own()) send({op:'heartbeat'}); }, 400);
 setInterval(() => {
   if (!own() || !state.armed || document.hidden || !document.hasFocus()) return;
   const axes = [0,0,0,0,0];
@@ -164,6 +183,7 @@ for (let i = 1; i <= 8; i++) {
   const title = document.createElement('strong'); title.textContent = `CAM ${i}`;
   const status = document.createElement('p'); status.id = 'presetState'+i; status.textContent = '未保存'; status.className = 'muted';
   const name = document.createElement('input'); name.id = 'name'+i; name.maxLength = 48; name.value = `CAM ${i}`; name.setAttribute('aria-label',`CAM ${i} 保存名`);
+  const values = document.createElement('p'); values.id = 'presetValue'+i; values.className = 'muted stored';
   const actions = document.createElement('div'); actions.className = 'actions';
   const recall = document.createElement('button'); recall.textContent = '呼出'; recall.dataset.recall = String(i); recall.disabled = true;
   recall.onclick = () => { clearInput(false); send({op:'recall',slot:String(i),duration:Number($('duration').value)}); };
@@ -174,8 +194,9 @@ for (let i = 1; i <= 8; i++) {
       save.dataset.confirmUntil = String(Date.now() + 5000);
       toast(`CAM ${i} を上書きするには5秒以内にもう一度「保存」を押してください。`, 'notice'); return;
     }
+    savingSlot = i;
     send({op:'save',slot:String(i),name:name.value});
   };
-  actions.append(recall,save); box.append(title,status,name,actions); $('presets').append(box);
+  actions.append(recall,save); box.append(title,status,values,name,actions); $('presets').append(box);
 }
 availability();

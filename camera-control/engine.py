@@ -17,7 +17,13 @@ SETTINGS = {
     'Lock': ('b', None, None),
     'LookAtMe': ('b', None, None),
 }
-LEASE_SECONDS = 1.5
+# Ownership ends when the socket closes, when the operator releases it, or
+# after this long with no word at all. It is generous on purpose: the operator
+# is watching VRChat, not this page, and browsers throttle a hidden tab's
+# timers to about one tick a minute. A camera must not change hands, or grey
+# out its own controls, because its operator alt-tabbed into the game.
+# Runaway motion is not what this guards; INPUT_SECONDS is.
+LEASE_SECONDS = 60.0
 INPUT_SECONDS = 0.4
 POSE_SECONDS = 5.0
 CAPTURE_SECONDS = 1.0
@@ -251,8 +257,10 @@ class Engine:
             if self.owner == client:
                 self.release(client)
             raise ValueError('Acquire control first')
+        # Any command is proof the operator is still there, not only a heartbeat.
+        self.lease_at = now
         if op == 'heartbeat':
-            self.lease_at = now
+            pass
         elif op == 'release':
             self.release(client)
         elif op == 'set':

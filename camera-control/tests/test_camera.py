@@ -74,6 +74,17 @@ class EngineTests(unittest.TestCase):
         for name,value in [('Mode',True),('Mode',2.0),('Mode',5),('Zoom',float('inf')),('Zoom',151),('Zoom','45'),('SmoothMovement',1),('input/Vertical',1),('Pose',[0]*6)]:
             with self.subTest(name=name,value=value), self.assertRaises(ValueError): self.command(op='set',name=name,value=value)
         self.assertFalse(self.sent)
+    def test_a_quiet_operator_keeps_the_camera_while_watching_vrchat(self):
+        # A hidden tab stops heartbeating; losing control there greyed out every
+        # button, so pressing save did nothing at all and explained nothing.
+        self.now += 20
+        self.command(op='save',slot='1',name='CAM 1')
+        self.assertIn('1',self.store.data['default'])
+        self.now += 20
+        self.command(op='heartbeat')
+        self.now += 50  # the heartbeat refreshed the lease, so this is still ours
+        self.command(op='save',slot='2',name='CAM 2')
+        self.assertIn('2',self.store.data['default'])
     def test_lease_is_exclusive(self):
         with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'claim'})
         with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'set','name':'Mode','value':2})
@@ -81,13 +92,13 @@ class EngineTests(unittest.TestCase):
         self.engine.dispatch('b',{'op':'stop'})
         self.assertFalse(self.engine.armed)
     def test_expired_lease_rejects_commands_before_tick(self):
-        self.now += 1.6
+        self.now += 61
         with self.assertRaises(ValueError): self.command(op='set',name='Zoom',value=50)
         self.assertIsNone(self.engine.owner)
         self.assertFalse(self.sent)
     def test_new_owner_never_inherits_motion(self):
         self.command(op='motion',axes=[1,0,0,0,0])
-        self.now += 1.6
+        self.now += 61
         self.engine.dispatch('b',{'op':'claim'})
         self.assertFalse(self.engine.armed)
         self.assertEqual(self.engine.axes,[0]*5)

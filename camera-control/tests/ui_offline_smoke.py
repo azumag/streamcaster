@@ -57,6 +57,7 @@ async def main():
   assert await page.locator('#presets img').count()==0
   # Overwriting asks once; a refused save must not consume that confirmation,
   # or the operator is stuck re-confirming forever (as they were).
+  await page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t=>t.remove())")
   await page.evaluate('cameraTest.refuseSave=true')
   await page.locator('[data-save="1"]').click()
   assert await page.locator('#toasts .toast.notice').count()==1
@@ -66,6 +67,11 @@ async def main():
   assert await page.locator('#toasts .toast.notice').count()==1, '確認は消費されない'
   await page.evaluate('cameraTest.refuseSave=false')
   await page.locator('[data-save="1"]').click()
+  # A stored save has to say so: overwriting under the same name changes nothing
+  # else on screen, so silence read as failure.
+  assert await page.locator('#toasts .toast.ok').count()==1, '保存成功は緑のトースト'
+  assert await page.locator('#toasts .toast.notice').count()==0, '古い確認トーストは消える'
+  assert 'Zoom' in await page.locator('#presetValue1').text_content()
   await page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t=>t.remove())")
   await page.locator('[data-save="1"]').click()
   assert await page.locator('#toasts .toast.notice').count()==1, '保存成功後は再び確認を求める'
