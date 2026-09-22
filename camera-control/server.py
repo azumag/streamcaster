@@ -128,6 +128,23 @@ class Feedback(asyncio.DatagramProtocol):
         self.engine.stop('UDP error; check VRChat')
 
 
+def named(command):
+    """The op a client asked for, or a placeholder when the message never parsed."""
+    if isinstance(command, dict) and isinstance(command.get('op'), str):
+        return command['op'][:24]
+    return '<unparsed>'
+
+
+def journal(operator, op, outcome):
+    """One line per operator command, so a refusal exists outside the browser.
+
+    A control surface that refuses in the UI and records nothing anywhere else
+    cannot be diagnosed during a rehearsal, which is exactly when it has to be.
+    Heartbeats and motion are omitted: they are continuous and would bury this.
+    """
+    print(f'{time.strftime("%H:%M:%S")} {operator} {op}: {outcome}', flush=True)
+
+
 def parse_message(raw):
     if not isinstance(raw, str) or len(raw) > 4096:
         raise ValueError('Expected a small text JSON message')
@@ -265,18 +282,23 @@ async def websocket(request):
                 engine.release(client)
                 await ws.close(code=1008, message=b'Rate limit')
                 break
+            command = None
             try:
                 command = parse_message(event.data)
                 engine.dispatch(client, command)
                 # Telemetry, not an 'applied' acknowledgement, shows camera state.
                 if command['op'] not in ('heartbeat', 'motion'):
+                    journal(operator, command['op'], 'accepted')
                     await send({'type': 'accepted', 'op': command['op']})
             except ValueError as exc:
+                journal(operator, named(command), f'refused: {exc}')
                 await send({'type': 'error', 'message': str(exc)[:180]})
             except (TypeError, OverflowError, RecursionError):
+                journal(operator, named(command), 'refused: invalid structure or value')
                 await send({'type': 'error', 'message': 'Invalid command structure or value.'})
-            except OSError:
+            except OSError as exc:
                 engine.stop('I/O error')
+                journal(operator, named(command), f'failed: {exc}')
                 await send({'type': 'error', 'message': 'Local OSC or preset I/O failed; check server.'})
     except (ValueError, TypeError, UnicodeError, RecursionError):
         await ws.close(code=1008, message=b'Invalid authentication message')

@@ -17,7 +17,7 @@ from osc_probe import summarize, watch
 from photos import Photos
 from state_probe import verdict
 from urllib.parse import urlsplit
-from server import Config, ENGINE, Feedback, create_app, parse_message, response_headers
+from server import Config, ENGINE, Feedback, create_app, named, parse_message, response_headers
 
 PUBLIC = 'https://camera.example.ts.net:8443'
 
@@ -383,6 +383,16 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         await self.until(ws,'accepted')
         data=await asyncio.wait_for(asyncio.get_running_loop().sock_recv(self.udp,4096),1)
         self.assertEqual(decode(data),('/usercamera/Capture',[True],'T'))
+    async def test_a_refusal_is_recorded_outside_the_browser(self):
+        # The operator's only clue used to be a toast in a page nobody was watching.
+        ws=await self.connect()
+        await ws.send_json({'op':'claim'})
+        await ws.send_json({'op':'save','slot':'1','name':'CAM 1'})
+        error=await self.until(ws,'error')
+        self.assertIn('Pose',error['message'])
+        self.assertEqual(named({'op':'save'}),'save')
+        self.assertEqual(named('not a dict'),'<unparsed>')
+        self.assertEqual(named(None),'<unparsed>')
     async def test_reject_host_and_origin(self):
         async with self.session.get(self.url+'/',headers={'Host':'evil.test'}) as response: self.assertEqual(response.status,403)
         with self.assertRaises(WSServerHandshakeError): await self.connect(origin='https://evil.test')
