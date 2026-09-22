@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]/'public'
 FAKE=r'''
 window.cameraTest={messages:[]};
-const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,autoCapture:true,awaitingPhoto:false,moving:false,recallSlot:null,udpError:null,photoAt:null,presets:{}};
+const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,autoCapture:true,awaitingPhoto:false,moving:false,recallSlot:null,canStop:true,udpError:null,photoAt:null,presets:{}};
 window.WebSocket=class extends EventTarget {
  static OPEN=1;
  constructor(){super();this.readyState=1;cameraTest.socket=this;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
@@ -166,6 +166,12 @@ async def main():
   assert [m for m in since if m.get('op')=='motion' and not any(m['axes'])], since
   await page.locator('#stop').click()
   assert await page.locator('[data-axis]').first.is_disabled()
+  # A remote operator has no emergency brake: it belongs to the VRChat PC.
+  await state(canStop=False)
+  assert await page.locator('#stop').is_disabled()
+  assert 'VRChat PC' in await page.locator('#stopHint').text_content()
+  await state(canStop=True)
+  assert await page.locator('#stop').is_enabled()
   # Remove the deliberate XSS fixture from the presentation screenshot.
   await page.locator('#name2').fill('演者アップ');await page.locator('[data-save="2"]').click();await page.locator('[data-save="2"]').click()
   await page.evaluate("document.querySelector('footer').textContent='UI PREVIEW / 模擬OSCデータ・実機接続ではありません'")

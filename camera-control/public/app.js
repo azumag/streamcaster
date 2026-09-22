@@ -76,7 +76,8 @@ function availability() {
   $('takeover').disabled = !authenticated || !state || !state.owner || owner;
   $('release').disabled = !owner;
   $('arm').disabled = !owner || !state.poseWriteEnabled;
-  $('stop').disabled = !authenticated;
+  $('stop').disabled = !authenticated || (state && !state.canStop);
+  $('stopHint').textContent = state && !state.canStop ? 'VRChat PCのみ' : '移動を止める';
   $('disconnect').disabled = !ws;
   $('connect').disabled = !!ws;
   document.querySelectorAll('[data-setting],#profile,#setProfile,[data-save],#capture,#autoCapture').forEach(e => e.disabled = !owner);

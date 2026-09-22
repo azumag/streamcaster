@@ -53,6 +53,7 @@ class EngineTests(unittest.TestCase):
         self.store = Presets(Path(self.temp.name)/'presets.json')
         self.engine = Engine(lambda *args:self.sent.append(args), self.store,
                              enable_pose=True, clock=lambda:self.now)
+        self.engine.local_clients.add('a')   # sitting at the VRChat PC
         self.engine.receive('/usercamera/Pose',[10,2,20,0,0,0],'ffffff')
         self.engine.receive('/usercamera/Zoom',[45.0],'f')
         self.engine.dispatch('a',{'op':'claim'})
@@ -105,8 +106,15 @@ class EngineTests(unittest.TestCase):
         self.engine.dispatch('b',{'op':'takeover'})
         self.assertEqual(self.engine.owner,'b')
         self.assertNotEqual(self.engine.reason,'Control taken over')
-    def test_any_authenticated_operator_can_stop(self):
-        self.engine.dispatch('b',{'op':'stop'})
+    def test_stop_belongs_to_the_vrchat_pc(self):
+        # The emergency brake is for whoever can see the screen and the room.
+        with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'stop'})
+        self.assertTrue(self.engine.armed)
+        self.engine.dispatch('a',{'op':'stop'})     # local, and not the owner check
+        self.assertFalse(self.engine.armed)
+    def test_a_local_observer_can_stop_without_holding_control(self):
+        self.engine.local_clients.add('c')
+        self.engine.dispatch('c',{'op':'stop'})
         self.assertFalse(self.engine.armed)
     def test_expired_lease_rejects_commands_before_tick(self):
         self.now += 61
@@ -537,6 +545,15 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         async with self.session.get(self.url+'/',headers={'Host':'evil.test'}) as response: self.assertEqual(response.status,403)
         with self.assertRaises(WSServerHandshakeError): await self.connect(origin='https://evil.test')
         with self.assertRaises(WSServerHandshakeError): await self.session.ws_connect(self.url+'/ws')
+    async def test_only_the_vrchat_pc_can_stop(self):
+        remote=await self.remote(login='alice@example.com')
+        self.assertFalse((await self.until(remote,'state'))['canStop'])
+        await remote.send_json({'op':'stop'})
+        self.assertIn('VRChat PC',(await self.until(remote,'error'))['message'])
+        local=await self.connect()
+        self.assertTrue((await self.until(local,'state'))['canStop'])
+        await local.send_json({'op':'stop'})
+        await self.until(local,'accepted')
     async def test_serve_port_requires_tailscale_identity(self):
         # Serve adds the header for tailnet traffic and omits it for Funnel.
         with self.assertRaises(WSServerHandshakeError):

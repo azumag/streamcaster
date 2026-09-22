@@ -184,6 +184,10 @@ class Engine:
         # Which preset is being moved to, so the button the operator pressed can
         # say what it is doing. Feedback belongs where the press happened.
         self.recall_slot = None
+        # Connections that arrived on the loopback UI port, i.e. someone sitting
+        # at the VRChat PC. Registered by the server, which is the only place
+        # that can tell where a connection came from.
+        self.local_clients = set()
         self.was_moving = False
 
     def emit(self, name, values, types):
@@ -287,7 +291,11 @@ class Engine:
         if not isinstance(msg, dict) or not isinstance(msg.get('op'), str):
             raise ValueError('Expected a command object')
         op, now = msg['op'], self.clock()
-        if op == 'stop':  # Every authenticated observer may stop motion.
+        if op == 'stop':
+            # The emergency brake belongs to the person who can see the screen
+            # and the room, not to a remote operator working from a photo.
+            if client not in self.local_clients:
+                raise ValueError('STOP is only available at the VRChat PC')
             self.stop('Emergency STOP')
             return
         if op in ('claim', 'takeover'):

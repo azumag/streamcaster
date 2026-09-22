@@ -326,15 +326,18 @@ async def websocket(request):
                 found = photos.newest() if photos else None
                 state['photoAt'] = round(found[1], 3) if found else None
                 state['awaitingPhoto'] = bool(photos) and awaiting_photo(engine, found)
-                await send({**state, 'client': client, 'operator': operator})
+                await send({**state, 'client': client, 'operator': operator, 'canStop': local})
                 await asyncio.sleep(0.1)
         except (ConnectionError, RuntimeError, asyncio.TimeoutError):
             engine.release(client)
             await ws.close()
 
+    local = arrived_on(request) != config.remote_port
     try:
         await ws.prepare(request)
         request.app[OPERATORS][client] = operator
+        if local:
+            engine.local_clients.add(client)
         await send({'type': 'authenticated', 'client': client, 'operator': operator})
         publisher = asyncio.create_task(publish())
         window, count = time.monotonic(), 0
@@ -376,6 +379,7 @@ async def websocket(request):
             await ws.close()
     finally:
         engine.release(client)
+        engine.local_clients.discard(client)
         clients.discard(ws)
         request.app[OPERATORS].pop(client, None)
         if publisher:
