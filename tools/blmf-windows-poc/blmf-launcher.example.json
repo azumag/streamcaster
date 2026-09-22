@@ -16,6 +16,7 @@
     "feedbackPort": 9002,
     "forwardPort": 9001,
     "oscPort": 9000,
-    "enablePoseWrite": true
+    "enablePoseWrite": true,
+    "photoDir": "%USERPROFILE%\\Pictures\\VRChat"
   }
 }

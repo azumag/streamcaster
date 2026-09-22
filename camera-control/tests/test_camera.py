@@ -3,8 +3,10 @@ import json
 from pathlib import Path
 import socket
 import struct
+import os
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -12,9 +14,10 @@ from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType, web
 from engine import Engine, Presets, angle_lerp
 from osc_codec import encode, decode
 from osc_probe import summarize, watch
+from photos import Photos
 from state_probe import verdict
 from urllib.parse import urlsplit
-from server import Config, ENGINE, Feedback, create_app, parse_message, response_headers
+from server import Config, ENGINE, Feedback, awaiting_photo, create_app, named, parse_message, response_headers
 
 PUBLIC = 'https://camera.example.ts.net:8443'
 
@@ -50,6 +53,7 @@ class EngineTests(unittest.TestCase):
         self.store = Presets(Path(self.temp.name)/'presets.json')
         self.engine = Engine(lambda *args:self.sent.append(args), self.store,
                              enable_pose=True, clock=lambda:self.now)
+        self.engine.local_clients.add('a')   # sitting at the VRChat PC
         self.engine.receive('/usercamera/Pose',[10,2,20,0,0,0],'ffffff')
         self.engine.receive('/usercamera/Zoom',[45.0],'f')
         self.engine.dispatch('a',{'op':'claim'})
@@ -71,23 +75,67 @@ class EngineTests(unittest.TestCase):
         for name,value in [('Mode',True),('Mode',2.0),('Mode',5),('Zoom',float('inf')),('Zoom',151),('Zoom','45'),('SmoothMovement',1),('input/Vertical',1),('Pose',[0]*6)]:
             with self.subTest(name=name,value=value), self.assertRaises(ValueError): self.command(op='set',name=name,value=value)
         self.assertFalse(self.sent)
+    def test_a_quiet_operator_keeps_the_camera_while_watching_vrchat(self):
+        # A hidden tab stops heartbeating; losing control there greyed out every
+        # button, so pressing save did nothing at all and explained nothing.
+        self.now += 20
+        self.command(op='save',slot='1',name='CAM 1')
+        self.assertIn('1',self.store.data['default'])
+        self.now += 20
+        self.command(op='heartbeat')
+        self.now += 50  # the heartbeat refreshed the lease, so this is still ours
+        self.command(op='save',slot='2',name='CAM 2')
+        self.assertIn('2',self.store.data['default'])
     def test_lease_is_exclusive(self):
         with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'claim'})
         with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'set','name':'Mode','value':2})
-    def test_any_authenticated_operator_can_stop(self):
-        self.engine.dispatch('b',{'op':'stop'})
+    def test_control_can_be_taken_from_a_live_operator(self):
+        # Claiming stays polite - the page claims on load, so opening a tab
+        # must not steal the camera - while taking over is explicit.
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'claim'})
+        self.engine.dispatch('b',{'op':'takeover'})
+        self.assertEqual(self.engine.owner,'b')
+        self.assertEqual(self.engine.reason,'Control taken over')
+        self.assertTrue(self.engine.armed)          # the position is still known
+        self.assertEqual(self.engine.axes,[0]*5)    # the motion is not inherited
+        self.assertEqual(self.engine.velocity,[0]*5)
+        with self.assertRaises(ValueError): self.command(op='motion',axes=[1,0,0,0,0])
+    def test_taking_over_an_idle_camera_is_an_ordinary_claim(self):
+        self.engine.release('a')
+        self.engine.dispatch('b',{'op':'takeover'})
+        self.assertEqual(self.engine.owner,'b')
+        self.assertNotEqual(self.engine.reason,'Control taken over')
+    def test_stop_belongs_to_the_vrchat_pc(self):
+        # The emergency brake is for whoever can see the screen and the room.
+        with self.assertRaises(ValueError): self.engine.dispatch('b',{'op':'stop'})
+        self.assertTrue(self.engine.armed)
+        self.engine.dispatch('a',{'op':'stop'})     # local, and not the owner check
+        self.assertFalse(self.engine.armed)
+    def test_a_local_observer_can_stop_without_holding_control(self):
+        self.engine.local_clients.add('c')
+        self.engine.dispatch('c',{'op':'stop'})
         self.assertFalse(self.engine.armed)
     def test_expired_lease_rejects_commands_before_tick(self):
-        self.now += 1.6
+        self.now += 61
         with self.assertRaises(ValueError): self.command(op='set',name='Zoom',value=50)
         self.assertIsNone(self.engine.owner)
         self.assertFalse(self.sent)
-    def test_new_owner_never_inherits_motion(self):
-        self.command(op='motion',axes=[1,0,0,0,0])
-        self.now += 1.6
+    def test_a_new_owner_inherits_the_arm_but_never_the_motion(self):
+        # Handing over should not cost the next operator an ARM: the camera's
+        # position is known regardless of who is driving. Motion does not cross.
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.now += 61
         self.engine.dispatch('b',{'op':'claim'})
-        self.assertFalse(self.engine.armed)
+        self.assertTrue(self.engine.armed)
         self.assertEqual(self.engine.axes,[0]*5)
+        self.assertEqual(self.engine.velocity,[0]*5)
+        self.assertIsNone(self.engine.transition)
+        count=len(self.sent); self.now += 1/30; self.engine.tick(1/30)
+        self.assertEqual(len(self.sent),count)   # nothing moves until b asks
+        self.engine.dispatch('b',{'op':'motion','axes':[1,0,0,0,0]})
+        self.step()
+        self.assertGreater(len(self.sent),count)
     def test_motion_is_smoothed_and_world_relative(self):
         self.engine.receive('/usercamera/Pose',[10,2,20,0,90,0],'ffffff')
         self.command(op='motion',axes=[0,1,0,0,0],speed=1)
@@ -105,9 +153,14 @@ class EngineTests(unittest.TestCase):
         count=len(self.sent); self.now += 0.5; self.engine.tick(1/30)
         self.assertEqual(len(self.sent),count)
         self.assertEqual(self.engine.velocity,[0]*5)
-    def test_disconnect_disarms(self):
-        self.engine.release('a'); self.assertIsNone(self.engine.owner)
-        self.assertFalse(self.engine.armed)
+    def test_disconnect_stops_the_camera_and_keeps_the_known_position(self):
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.engine.release('a')
+        self.assertIsNone(self.engine.owner)
+        self.assertEqual(self.engine.velocity,[0]*5)
+        self.assertTrue(self.engine.armed)
+        # An unowned engine cannot be moved by anyone; control comes first.
+        with self.assertRaises(ValueError): self.command(op='motion',axes=[1,0,0,0,0])
     def test_stalled_loop_disarms(self):
         self.command(op='motion',axes=[1,0,0,0,0]); self.step(0.3)
         self.assertFalse(self.engine.armed); self.assertFalse(self.sent)
@@ -131,9 +184,21 @@ class EngineTests(unittest.TestCase):
         self.assertIn('stale',self.engine.reason)
         self.engine.receive('/usercamera/Pose',[10,2,20,0,0,0],'ffffff')
         self.assertFalse(self.engine.state()['contactLost'])
-    def test_stale_pose_cannot_arm(self):
-        self.now += 6; self.engine.dispatch('a',{'op':'claim'})
-        with self.assertRaises(ValueError): self.command(op='arm')
+    def test_a_camera_held_still_can_still_be_armed(self):
+        # Framing a shot and then reaching the browser takes longer than the
+        # five seconds this used to allow, and a still camera reports nothing.
+        self.now += 60; self.engine.dispatch('a',{'op':'claim'})
+        self.command(op='arm')
+        self.assertTrue(self.engine.armed)
+        self.assertEqual(self.engine.pose,[10,2,20,0,0,0])
+    def test_arming_still_needs_a_position_and_live_contact(self):
+        engine=Engine(lambda *a:None,self.store,enable_pose=True,clock=lambda:self.now)
+        engine.dispatch('b',{'op':'claim'})
+        with self.assertRaises(ValueError): engine.dispatch('b',{'op':'arm'})
+        engine.receive('/usercamera/Pose',[10,2,20,0,0,0],'ffffff')
+        engine.dispatch('b',{'op':'arm'})
+        engine.contact_lost=True
+        with self.assertRaises(ValueError): engine.dispatch('b',{'op':'arm'})
     def test_feedback_does_not_overwrite_active_target(self):
         self.engine.receive('/usercamera/Pose',[1,1,1,0,0,0],'ffffff')
         self.assertEqual(self.engine.pose[:3],[10,2,20])
@@ -184,6 +249,8 @@ class EngineTests(unittest.TestCase):
         self.command(op='profile',value='venue-2')
         self.assertFalse(self.engine.armed)
         with self.assertRaises(ValueError): self.command(op='arm')
+        # Another world's coordinates must not be saved as this one's either.
+        with self.assertRaises(ValueError): self.command(op='save',slot='1',name='stage')
     def test_preset_interpolates_shortest_yaw(self):
         self.store.put('default','1',{'name':'stage','pose':[20,2,20,0,-179,0],'zoom':85})
         self.engine.receive('/usercamera/Pose',[10,2,20,0,179,0],'ffffff')
@@ -264,6 +331,101 @@ class EngineTests(unittest.TestCase):
         self.engine.receive('/usercamera/Mode',[2],'i')
         self.engine.receive('/usercamera/Mode',[6],'i')
         self.assertFalse(self.engine.armed)
+    def test_capture_asks_vrchat_to_take_the_photo(self):
+        self.command(op='capture')
+        self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_capture_needs_an_open_camera_and_does_not_spam_the_disk(self):
+        self.command(op='capture')
+        with self.assertRaises(ValueError): self.command(op='capture')  # one photo per second
+        self.now += 1
+        self.engine.receive('/usercamera/Mode',[0],'i')
+        with self.assertRaises(ValueError): self.command(op='capture')
+        self.engine.receive('/usercamera/Mode',[2],'i')
+        self.command(op='capture')
+    def test_capture_does_not_need_arming_or_stop_motion(self):
+        # Taking a photo moves nothing, so it must work from a plain claim.
+        engine=Engine(lambda *args:self.sent.append(args),self.store,clock=lambda:self.now)
+        engine.dispatch('b',{'op':'claim'})
+        engine.dispatch('b',{'op':'capture'})
+        self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_a_finished_move_photographs_where_the_camera_landed(self):
+        self.store.put('default','1',{'name':'stage','pose':[20,2,20,0,0,0],'zoom':85})
+        self.command(op='recall',slot='1',duration=0)
+        self.step()                       # the CUT lands
+        self.sent.clear()
+        self.idle(0.5)
+        self.assertEqual(self.sent,[])    # not yet: let the camera settle first
+        self.idle(0.6)
+        self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_a_camera_that_starts_moving_again_is_not_photographed_mid_flight(self):
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.command(op='motion',axes=[0]*5); self.step()
+        self.sent.clear()
+        self.idle(0.4)
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()   # off again
+        self.idle(1.0)
+        self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_the_confirmation_shot_can_be_turned_off(self):
+        self.command(op='autoCapture',value=False)
+        self.assertFalse(self.engine.state()['autoCapture'])
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.command(op='motion',axes=[0]*5); self.step()
+        self.sent.clear()
+        self.idle(1.5)
+        self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+        with self.assertRaises(ValueError): self.command(op='autoCapture',value='yes')
+    def test_stopping_or_losing_contact_takes_no_photo(self):
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.command(op='stop')           # emergency stop disarms; nothing to confirm
+        self.sent.clear()
+        self.idle(1.5)
+        self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+        self.command(op='arm')
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.command(op='motion',axes=[0]*5); self.step()
+        self.engine.contact_lost=True
+        self.sent.clear()
+        self.idle(1.5)
+        self.assertNotIn(('/usercamera/Capture',[True],'T'),self.sent)
+    def test_state_says_the_camera_is_on_its_way(self):
+        # The preview only ever holds the last photo, so the UI has to know that
+        # what it is showing is not where the camera is going.
+        self.store.put('default','1',{'name':'stage','pose':[20,2,20,0,0,0],'zoom':85})
+        self.assertFalse(self.engine.state()['moving'])
+        self.command(op='recall',slot='1',duration=2.5)
+        self.assertTrue(self.engine.state()['moving'])
+        self.idle(3)
+        self.assertFalse(self.engine.state()['moving'])
+        self.command(op='motion',axes=[1,0,0,0,0]); self.step()
+        self.assertTrue(self.engine.state()['moving'])
+    def test_state_names_the_preset_being_moved_to(self):
+        # The recall button has to say what it is doing; that needs the slot.
+        self.store.put('default','2',{'name':'stage','pose':[20,2,20,0,0,0],'zoom':85})
+        self.assertIsNone(self.engine.state()['recallSlot'])
+        self.command(op='recall',slot='2',duration=2.5)
+        self.assertEqual(self.engine.state()['recallSlot'],'2')
+        self.idle(3)
+        # Still named after landing, so the button can say 撮影中 while it waits.
+        self.assertEqual(self.engine.state()['recallSlot'],'2')
+        self.command(op='motion',axes=[1,0,0,0,0])
+        self.assertIsNone(self.engine.state()['recallSlot'])
+        self.command(op='recall',slot='2',duration=2.5)
+        self.command(op='stop')
+        self.assertIsNone(self.engine.state()['recallSlot'])
+    def test_saving_a_preset_photographs_the_shot_it_stored(self):
+        self.command(op='save',slot='1',name='CAM 1')
+        self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)
+        self.assertEqual(self.engine.photo_for,('default','1'))
+        self.store.attach('default','1','VRChat_2026-09-22_19-07-02.111_1920x1080.png')
+        self.assertEqual(Presets(self.store.path).data['default']['1']['photo'],
+                         'VRChat_2026-09-22_19-07-02.111_1920x1080.png')
+    def test_a_preset_photo_is_a_file_name_and_never_a_path(self):
+        for bad in ('../secrets.png','a/b.png','C:' + chr(92) + 'x.png','notes.txt','.hidden.png','','x'*200+'.png'):
+            with self.subTest(bad=bad), self.assertRaises(ValueError): Presets.photo(bad)
+        with self.assertRaises(ValueError):
+            self.store.put('default','2',{'name':'x','pose':[0]*6,'zoom':45,'photo':'../a.png'})
+        with self.assertRaises(ValueError):
+            self.store.put('default','2',{'name':'x','pose':[0]*6,'zoom':45,'extra':1})
     def test_bad_feedback_types(self):
         with self.assertRaises(ValueError): self.engine.receive('/usercamera/Pose',[1]*6,'iiiiii')
         with self.assertRaises(ValueError): self.engine.receive('/usercamera/Zoom',[45],'i')
@@ -282,7 +444,8 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         port=free_port(); remote=free_port(); feedback=free_port(socket.SOCK_DGRAM)
         self.config=Config(port=port,feedback_port=feedback,osc_port=self.udp.getsockname()[1],
                            public_origin=PUBLIC,remote_port=remote,enable_pose=True,
-                           presets=Path(self.temp.name)/'presets.json')
+                           presets=Path(self.temp.name)/'presets.json',
+                           photo_dir=Path(self.temp.name)/'photos')
         self.app=create_app(self.config); self.runner=web.AppRunner(self.app)
         await self.runner.setup()
         for bind in (port,remote): await web.TCPSite(self.runner,'127.0.0.1',bind).start()
@@ -316,10 +479,81 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('frame-ancestors',response.headers['Content-Security-Policy'])
         async with self.session.get(self.url+'/.data/presets.json') as response: self.assertEqual(response.status,404)
         async with self.session.get(self.url+'/?token=abc') as response: self.assertEqual(response.status,400)
+    def save_photo(self,name='2026-09/VRChat_1920x1080.png',data=b'fake png bytes',age=5.0):
+        path=self.config.photo_dir/name
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(data)
+        stamp=time.time()-age
+        os.utime(path,(stamp,stamp))
+        return path
+    async def test_photo_is_absent_until_vrchat_saves_one(self):
+        async with self.session.get(self.url+'/photo') as response:
+            self.assertEqual(response.status,404)
+    async def test_photo_serves_only_the_newest_file_and_never_a_named_one(self):
+        self.save_photo('2026-08/older.png',b'old',age=600)
+        newest=self.save_photo()
+        for path in ('/photo','/photo/1758412345678'):
+            async with self.session.get(self.url+path) as response:
+                self.assertEqual(response.status,200)
+                self.assertEqual(response.headers['Content-Type'],'image/png')
+                self.assertEqual(response.headers['Cache-Control'],'no-store')
+                self.assertEqual(await response.read(),newest.read_bytes())
+        # The trailing segment is a cache key, not a file name: nothing else matches.
+        for path in ('/photo/presets.json','/photo/2026-08/older.png','/photo/..%2f..%2fpresets.json'):
+            async with self.session.get(self.url+path) as response:
+                self.assertEqual(response.status,404)
+    async def test_preset_photo_comes_from_the_store_not_the_url(self):
+        saved=self.save_photo('2026-09/VRChat_shot.png',b'preset framing',age=5)
+        self.save_photo('2026-09/newer.png',b'something else',age=1)
+        engine=self.app[ENGINE]
+        engine.presets.put('default','1',{'name':'CAM 1','pose':[1,2,3,0,0,0],'zoom':45})
+        async with self.session.get(self.url+'/preset-photo/default/1') as response:
+            self.assertEqual(response.status,404)  # saved before photos existed
+        engine.presets.attach('default','1','VRChat_shot.png')
+        for path in ('/preset-photo/default/1','/preset-photo/default/1/VRChat_shot.png',
+                     '/preset-photo/default/1/anything-at-all.png'):
+            async with self.session.get(self.url+path) as response:
+                self.assertEqual(response.status,200)
+                self.assertEqual(await response.read(),saved.read_bytes())
+        for path in ('/preset-photo/default/9','/preset-photo/bad!/1','/preset-photo/other/1',
+                     '/preset-photo/default/1/../../presets.json'):
+            async with self.session.get(self.url+path) as response:
+                self.assertEqual(response.status,404)
+    async def test_state_timestamps_the_photo_so_the_ui_can_refresh(self):
+        saved=self.save_photo()
+        ws=await self.connect()
+        state=await self.until(ws,'state')
+        self.assertAlmostEqual(state['photoAt'],saved.stat().st_mtime,places=2)
+    async def test_capture_reaches_vrchat_over_udp(self):
+        ws=await self.connect()
+        await ws.send_json({'op':'claim'})
+        await ws.send_json({'op':'capture'})
+        await self.until(ws,'accepted')
+        data=await asyncio.wait_for(asyncio.get_running_loop().sock_recv(self.udp,4096),1)
+        self.assertEqual(decode(data),('/usercamera/Capture',[True],'T'))
+    async def test_a_refusal_is_recorded_outside_the_browser(self):
+        # The operator's only clue used to be a toast in a page nobody was watching.
+        ws=await self.connect()
+        await ws.send_json({'op':'claim'})
+        await ws.send_json({'op':'save','slot':'1','name':'CAM 1'})
+        error=await self.until(ws,'error')
+        self.assertIn('Pose',error['message'])
+        self.assertEqual(named({'op':'save'}),'save')
+        self.assertEqual(named('not a dict'),'<unparsed>')
+        self.assertEqual(named(None),'<unparsed>')
     async def test_reject_host_and_origin(self):
         async with self.session.get(self.url+'/',headers={'Host':'evil.test'}) as response: self.assertEqual(response.status,403)
         with self.assertRaises(WSServerHandshakeError): await self.connect(origin='https://evil.test')
         with self.assertRaises(WSServerHandshakeError): await self.session.ws_connect(self.url+'/ws')
+    async def test_only_the_vrchat_pc_can_stop(self):
+        remote=await self.remote(login='alice@example.com')
+        self.assertFalse((await self.until(remote,'state'))['canStop'])
+        await remote.send_json({'op':'stop'})
+        self.assertIn('VRChat PC',(await self.until(remote,'error'))['message'])
+        local=await self.connect()
+        self.assertTrue((await self.until(local,'state'))['canStop'])
+        await local.send_json({'op':'stop'})
+        await self.until(local,'accepted')
     async def test_serve_port_requires_tailscale_identity(self):
         # Serve adds the header for tailnet traffic and omits it for Funnel.
         with self.assertRaises(WSServerHandshakeError):
@@ -372,7 +606,9 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((address,types),('/usercamera/Pose','ffffff')); self.assertGreater(values[0],10)
         await asyncio.sleep(0.55); count=self.app[ENGINE].sent; await asyncio.sleep(0.12)
         self.assertEqual(self.app[ENGINE].sent,count)
-        await ws.close(); await asyncio.sleep(0.02); self.assertFalse(self.app[ENGINE].armed)
+        await ws.close(); await asyncio.sleep(0.02)
+        self.assertIsNone(self.app[ENGINE].owner)
+        self.assertEqual(self.app[ENGINE].velocity,[0]*5)
     async def test_invalid_json_and_unknown_commands_do_not_emit(self):
         ws=await self.connect(); await ws.send_json({'op':'claim'}); await self.until(ws,'accepted')
         for raw in ['[]','{"op":"exec","command":"ignored"}','{"op":"set","name":"Zoom","value":NaN}']:
@@ -435,6 +671,63 @@ class StateProbeTests(unittest.TestCase):
         self.assertEqual(verdict(None,9002)[0],False)
 
 
+class PhotoTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory()
+        self.root=Path(self.temp.name)
+        self.photos=Photos(self.root,ttl=0,settle=0)
+    def tearDown(self): self.temp.cleanup()
+    def write(self,name,data=b'x',age=0.0):
+        path=self.root/name
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(data)
+        stamp=time.time()-age
+        os.utime(path,(stamp,stamp))
+        return path
+    def test_newest_image_wins_across_the_monthly_folders(self):
+        self.write('2026-08/old.png',age=600)
+        newest=self.write('2026-09/new.png',age=10)
+        self.write('loose.jpg',age=300)
+        self.assertEqual(self.photos.newest()[0],newest)
+    def test_only_images_of_a_plausible_size_are_offered(self):
+        self.write('notes.txt',age=10)
+        self.write('presets.json',age=10)
+        self.write('empty.png',b'',age=10)
+        self.write('huge.png',b'x'*40,age=10)
+        self.assertIsNone(Photos(self.root,ttl=0,settle=0,max_bytes=20).newest())
+    def test_a_photo_still_being_written_is_not_shown_yet(self):
+        self.write('2026-09/fresh.png')
+        self.assertIsNone(Photos(self.root,ttl=0).newest())
+    def test_missing_folder_is_not_an_error(self):
+        self.assertIsNone(Photos(self.root/'nope',ttl=0,settle=0).newest())
+    def test_the_scan_is_cached_between_state_frames(self):
+        first=self.write('a.png',age=10)
+        photos=Photos(self.root,settle=0)
+        self.assertEqual(photos.newest()[0],first)
+        self.write('b.png',age=5)
+        self.assertEqual(photos.newest()[0],first)
+
+
+class AwaitingPhotoTests(unittest.TestCase):
+    class FakeEngine:
+        def __init__(self, capture_at=None, settle_at=None, now=100.0):
+            self.capture_at, self.settle_at, self.now = capture_at, settle_at, now
+        def clock(self): return self.now
+
+    def test_nothing_asked_for_means_nothing_to_wait_for(self):
+        self.assertFalse(awaiting_photo(self.FakeEngine(), None))
+        self.assertFalse(awaiting_photo(self.FakeEngine(), (Path('a.png'), time.time())))
+    def test_a_scheduled_confirmation_shot_counts_as_waiting(self):
+        self.assertTrue(awaiting_photo(self.FakeEngine(settle_at=101.0), None))
+    def test_waiting_until_a_file_newer_than_the_request_appears(self):
+        engine=self.FakeEngine(capture_at=98.0)          # asked for 2 seconds ago
+        self.assertTrue(awaiting_photo(engine,(Path('old.png'), time.time()-30)))
+        self.assertFalse(awaiting_photo(engine,(Path('new.png'), time.time()-1)))
+    def test_a_photo_that_never_arrives_stops_being_promised(self):
+        engine=self.FakeEngine(capture_at=100.0, now=111.0)
+        self.assertFalse(awaiting_photo(engine, None))
+
+
 class ConfigTests(unittest.TestCase):
     def test_config_guards(self):
         for args in ({'port':0},{'osc_port':9001},{'forward_port':9000},
@@ -442,7 +735,9 @@ class ConfigTests(unittest.TestCase):
                      {'public_origin':'https://user:pass@camera.ts.net'},
                      {'public_origin':PUBLIC},                      # publishing without a Serve port
                      {'remote_port':8766},                          # Serve port without publishing
-                     {'public_origin':PUBLIC,'remote_port':8765}):  # Serve port equal to the local one
+                     {'public_origin':PUBLIC,'remote_port':8765},   # Serve port equal to the local one
+                     {'photo_dir':'C:/photos'},                     # a string is not a path
+                     {'photo_dir':Path('photos')}):                 # relative to an unknown cwd
             with self.subTest(args=args), self.assertRaises(ValueError): Config(**args)
     def test_explicit_public_origin(self):
         config=Config(public_origin=PUBLIC,remote_port=8766)
@@ -467,18 +762,34 @@ class ConfigTests(unittest.TestCase):
             self.assertIsNone(engine.last_osc_at)
     def test_forwarding_preserves_original_payload(self):
         sent=[]
-        class Transport:
+        class Socket:
             def sendto(self,data,addr): sent.append((data,addr))
         class FakeEngine:
             invalid_osc=0
             def note_traffic(self): pass
             def receive(self,*args): pass
         config=Config(feedback_port=9002,forward_port=9001)
-        receiver=Feedback(FakeEngine(),config); receiver.connection_made(Transport())
+        receiver=Feedback(FakeEngine(),config,Socket()); receiver.connection_made(Socket())
         payload=b'/avatar/change\0\0,s\0\0avtr_example\0\0\0\0'
         receiver.datagram_received(payload,('127.0.0.1',9000))
         self.assertEqual(sent,[(payload,('127.0.0.1',9001))])
         receiver.datagram_received(payload,('192.0.2.1',9000)); self.assertEqual(len(sent),1)
+    def test_a_bridge_that_is_not_running_does_not_stop_the_camera(self):
+        # Windows answers a closed UDP port with a refusal on the sending socket.
+        # Sharing one socket meant a bridge nobody started disarmed the camera,
+        # over and over, for as long as VRChat kept speaking.
+        stopped=[]
+        class Socket:
+            def sendto(self,data,addr): raise ConnectionResetError('no bridge there')
+        class FakeEngine:
+            invalid_osc=0
+            def note_traffic(self): pass
+            def receive(self,*args): pass
+            def stop(self,*args,**kwargs): stopped.append(args)
+        config=Config(feedback_port=9002,forward_port=9001)
+        receiver=Feedback(FakeEngine(),config,Socket()); receiver.connection_made(Socket())
+        receiver.datagram_received(encode('/usercamera/Zoom',[45.0],'f'),('127.0.0.1',9000))
+        self.assertEqual(stopped,[])
 
 
 if __name__=='__main__': unittest.main()

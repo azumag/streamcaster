@@ -6,33 +6,84 @@
 <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
 </head>
 <body>
-<header><div><p class="eyebrow">STREAMCASTER / SEPARATE CONTROL SURFACE</p><h1>VRChat Camera Control <span>PROTOTYPE</span></h1><p>カメラだけを遠隔操作。OCI・シーン切替パネル・OBS配信操作から独立しています。</p></div><button id="stop" class="danger" disabled>STOP · 移動停止</button></header>
+<header>
+<div><p class="eyebrow">STREAMCASTER / CAMERA</p><h1>VRChat カメラ操作 <span>PROTOTYPE</span></h1></div>
+<button id="stop" class="danger" disabled>STOP<small id="stopHint">移動を止める</small></button>
+</header>
 <div id="toasts" aria-live="assertive" aria-atomic="false"></div>
 <main>
-<section class="panel connection">
-<form id="login"><button type="submit" id="connect">接続</button><button type="button" id="disconnect" disabled>切断</button></form>
-<div class="status-grid"><div><small>ブラウザ接続</small><strong id="connection">未接続</strong></div><div><small>あなた</small><strong id="operator">未接続</strong></div><div><small>操作権</small><strong id="owner">未取得</strong></div><div><small>カメラOSC受信</small><strong id="feedback">未確認</strong></div><div><small>位置操作</small><strong id="armStatus">無効</strong></div></div>
-<p id="message" role="status" aria-live="polite">Tailscale HTTPS経由、またはVRChat PCのlocalhostから接続してください。tailnetの許可が本人確認を兼ねるため、トークン入力はありません。</p>
-<div class="actions"><button id="claim" disabled>操作権を取得</button><button id="release" disabled>操作権を返す</button><button id="arm" disabled>受信した位置でARM</button></div>
+
+<section class="panel status">
+<p id="headline" class="headline wait">接続しています…</p>
+<p id="message" class="muted" role="status" aria-live="polite">tailnetの許可が本人確認を兼ねるため、トークン入力はありません。</p>
+<div class="actions">
+<button id="arm" class="primary" disabled>受信した位置でARM</button>
+<button id="claim" disabled>操作権を取得</button>
+<button id="takeover" disabled>操作権を奪う</button>
+<button id="release" disabled>操作権を返す</button>
+<form id="login"><button type="submit" id="connect" disabled>接続</button><button type="button" id="disconnect" disabled>切断</button></form>
+</div>
+<div class="chips">
+<span><small>接続</small><strong id="connection">未接続</strong></span>
+<span><small>あなた</small><strong id="operator">未接続</strong></span>
+<span><small>操作権</small><strong id="owner">未取得</strong></span>
+<span><small>カメラ受信</small><strong id="feedback">未確認</strong></span>
+<span><small>位置操作</small><strong id="armStatus">停止 / 未ARM</strong></span>
+</div>
 </section>
-<div class="columns">
-<section class="panel"><h2>01 / カメラ設定</h2><p class="muted">変更値は指令です。適用結果は下部のOSC受信値で確認してください。</p>
+
+<div class="stage">
+<section class="panel preview">
+<h2>プレビュー <span>VRCHAT PHOTO</span></h2>
+<figure id="photoBox"><img id="photo" alt="VRChatが保存した最新の写真" hidden><div id="photoWait" role="status" hidden>撮影中…</div><figcaption id="photoState" class="muted">未取得</figcaption></figure>
+<button id="capture" class="primary wide" disabled>撮影</button>
+<label class="check"><input id="autoCapture" type="checkbox" checked disabled>移動が終わったら自動で撮影して確認する</label>
+<p class="muted">VRChatに写真を撮らせ、保存された最新の1枚を表示します。映像モニターの代わりではなく構図確認用の静止画です。保存フォルダは起動時の設定のみで、ここからは指定できません。</p>
+</section>
+
+<section class="panel presets">
+<h2>プリセット</h2>
+<div class="preset-grid" id="presets"></div>
+<div class="actions">
+<label>移動時間<select id="duration"><option value="0">CUT（即時）</option><option value="1">1秒</option><option value="2.5" selected>2.5秒</option><option value="5">5秒</option><option value="10">10秒</option></select></label>
+<label>会場ID<input id="profile" value="default" maxlength="40" pattern="[A-Za-z0-9_-]+" disabled></label>
+<button id="setProfile" disabled>会場を切替</button>
+</div>
+<p class="muted">保存するのはOSCで受信した位置とZoomです。会場IDはワールド移動時に必ず変更してください（自動識別はしません）。切替後は新しいワールドでカメラを一度動かしてください。</p>
+</section>
+</div>
+
+<section class="panel ptz">
+<h2>手動操作 <span>EXPERIMENTAL</span></h2>
+<div class="pads">
+<div><h3>水平移動 W / A / S / D</h3><div class="pad"><button data-axis="1:1" disabled>前</button><button data-axis="0:-1" disabled>左</button><button data-axis="1:-1" disabled>後</button><button data-axis="0:1" disabled>右</button></div></div>
+<div><h3>パン / チルト 矢印キー</h3><div class="pad"><button data-axis="4:-1" disabled>上</button><button data-axis="3:-1" disabled>左</button><button data-axis="4:1" disabled>下</button><button data-axis="3:1" disabled>右</button></div></div>
+<div><h3>昇降 E / Q</h3><div class="pad tall"><button data-axis="2:1" disabled>上昇</button><button data-axis="2:-1" disabled>下降</button></div></div>
+</div>
+<div class="sliders">
+<label>移動速度（m/s）<output id="speedValue">1.00</output><input id="speed" type="range" min="0.05" max="5" step="0.05" value="1"></label>
+<label>旋回速度（度/秒）<output id="turnValue">30</output><input id="turn" type="range" min="1" max="90" step="1" value="30"></label>
+</div>
+<label class="check"><input id="gamepad" type="checkbox">ゲームパッドを使う（標準マッピング・RBを押している間だけ移動）</label>
+<p class="muted">水平移動はカメラの向き基準、昇降はワールド基準。スペースキーで即時停止します。ブラウザから離れると押しっぱなしのキーは解除されますが、プリセット移動は止まりません。</p>
+<p id="poseWarning" class="warning">Pose書き込みは試験機能です。</p>
+</section>
+
+<details class="panel" id="settings"><summary>カメラ設定（モード・Zoom・平滑化・Spout）</summary>
+<div class="settings">
 <label>モード<select id="mode" data-setting="Mode" disabled><option value="2">Stream</option><option value="6">Drone</option><option value="1">Photo</option><option value="0">Off</option></select></label>
 <label>Zoom <output id="zoomValue">45</output><input id="zoom" data-setting="Zoom" type="range" min="20" max="150" value="45" step="1" disabled></label>
 <label>VRChat Smoothing Strength <output id="smoothingValue">5.0</output><input id="smoothing" data-setting="SmoothingStrength" type="range" min="0.1" max="10" value="5" step="0.1" disabled></label>
 <div class="toggles"><label><input type="checkbox" data-setting="SmoothMovement" disabled>VRChat Smooth Movement</label><label><input type="checkbox" data-setting="Streaming" disabled>Spout出力</label><label><input type="checkbox" data-setting="Lock" disabled>Camera Lock</label><label><input type="checkbox" data-setting="LookAtMe" disabled>Look At Me</label></div>
-<p class="muted">移動を試す前にLockとLook At MeをOFF。Spout映像は従来どおりOBSで受け取ります。</p>
-</section>
-<section class="panel"><h2>02 / 手動PTZ <span>EXPERIMENTAL</span></h2><p id="poseWarning" class="warning">Pose書き込みは仕様記載が不一致のため試験機能です。実機での適用は未確認です。</p>
-<div class="pads"><div><h3>水平移動</h3><div class="pad"><button data-axis="1:1" disabled>前 W</button><button data-axis="0:-1" disabled>左 A</button><button data-axis="1:-1" disabled>後 S</button><button data-axis="0:1" disabled>右 D</button></div></div><div><h3>パン / チルト</h3><div class="pad"><button data-axis="4:-1" disabled>上 ↑</button><button data-axis="3:-1" disabled>左 ←</button><button data-axis="4:1" disabled>下 ↓</button><button data-axis="3:1" disabled>右 →</button></div></div></div>
-<div class="actions"><button data-axis="2:1" disabled>上昇 E</button><button data-axis="2:-1" disabled>下降 Q</button></div>
-<label>移動速度（m/s）<input id="speed" type="range" min="0.05" max="5" step="0.05" value="1"><output id="speedValue">1.00</output></label>
-<label>旋回速度（度/秒）<input id="turn" type="range" min="1" max="90" step="1" value="30"><output id="turnValue">30</output></label>
-<label class="check"><input id="gamepad" type="checkbox">ゲームパッドを使用（標準マッピング・RBを押している間だけ移動）</label><p class="muted">左スティック＝移動、右＝パン/チルト、LT/RT＝上下。水平移動はカメラの向き基準、上下はワールド基準。タブ切替・フォーカス喪失で停止し、再ARMが必要です。</p>
-</section>
 </div>
-<section class="panel"><h2>03 / 会場別プリセット</h2><div class="actions"><label>会場ID（ワールド移動時は必ず変更）<input id="profile" value="default" maxlength="40" pattern="[A-Za-z0-9_-]+" disabled></label><button id="setProfile" disabled>会場を切替</button><label>移動時間<select id="duration"><option value="0">CUT（即時）</option><option value="1">1秒</option><option value="2.5" selected>2.5秒</option><option value="5">5秒</option><option value="10">10秒</option></select></label></div>
-<div class="preset-grid" id="presets"></div><p class="muted">保存するのはOSCで受信した位置・Zoomです。VRChat内でカメラを動かし、Zoomを操作してから保存してください。会場IDは手動管理で、ワールドの自動識別は行いません。</p></section>
-<section class="panel"><h2>04 / 状態と確認</h2><div class="columns"><div><h3>OSC受信値（観測）</h3><pre id="observed">未受信</pre></div><div><h3>送信値（適用保証なし）</h3><pre id="requested">未送信</pre></div></div><p id="reason" class="muted">未接続</p><p class="warning">このページには映像プレビューがありません。カメラ担当者にはOBS等から別途モニター映像を渡してください。STOPは本アプリの位置送信を止めます。VRChat内部の平滑化の残りや、OBS配信自体を停止する機能ではありません。</p></section>
+<p class="muted">変更値は指令です。適用結果は下の受信値で確認してください。移動を試す前にLockとLook At MeはOFF。Spout映像は従来どおりOBSで受け取ります。補間中に画面が揺れる場合はVRChat Smooth MovementをOFFにして切り分けてください。</p>
+</details>
+
+<details class="panel" id="diagnostics"><summary>状態と受信値</summary>
+<div class="columns"><div><h3>OSC受信値（観測）</h3><pre id="observed">未受信</pre></div><div><h3>送信値（適用保証なし）</h3><pre id="requested">未送信</pre></div></div>
+<p id="reason" class="muted">未接続</p>
+<p class="warning">STOPは本アプリの位置送信を止めます。VRChat内部の平滑化の残りや、OBS配信自体を停止する機能ではありません。</p>
+</details>
+
 </main><footer>CAMERA CONTROL · localhost OSC only · no scene switching · no public Funnel</footer>
 </body></html>

@@ -17,9 +17,19 @@ SETTINGS = {
     'Lock': ('b', None, None),
     'LookAtMe': ('b', None, None),
 }
-LEASE_SECONDS = 1.5
+# Ownership ends when the socket closes, when the operator releases it, or
+# after this long with no word at all. It is generous on purpose: the operator
+# is watching VRChat, not this page, and browsers throttle a hidden tab's
+# timers to about one tick a minute. A camera must not change hands, or grey
+# out its own controls, because its operator alt-tabbed into the game.
+# Runaway motion is not what this guards; INPUT_SECONDS is.
+LEASE_SECONDS = 60.0
 INPUT_SECONDS = 0.4
 POSE_SECONDS = 5.0
+CAPTURE_SECONDS = 1.0
+# Wait for the camera to be properly at rest before the confirmation shot, so
+# the picture shows where it stopped rather than where it was still going.
+SETTLE_SECONDS = 0.8
 
 
 def number(value, low, high):
@@ -87,13 +97,32 @@ class Presets:
         return value
 
     @staticmethod
+    def photo(value):
+        """A file name VRChat chose, never a path: no separators, no walking up."""
+        if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,120}', value):
+            raise ValueError('Preset photo must be a plain file name')
+        if value.startswith('.') or not value.lower().endswith(('.png', '.jpg', '.jpeg')):
+            raise ValueError('Preset photo must be an image file name')
+        return value
+
+    @staticmethod
     def validate(value):
-        if not isinstance(value, dict) or set(value) != {'name', 'pose', 'zoom'}:
+        if not isinstance(value, dict) or not {'name', 'pose', 'zoom'} <= set(value)                 or set(value) - {'name', 'pose', 'zoom', 'photo'}:
             raise ValueError('Invalid preset')
         if not isinstance(value['name'], str) or not 1 <= len(value['name']) <= 48:
             raise ValueError('Preset name must contain 1-48 characters')
         pose_value(value['pose'])
         number(value['zoom'], 20, 150)
+        if 'photo' in value:
+            Presets.photo(value['photo'])
+
+    def attach(self, profile, slot, photo):
+        """Remember which photo shows this preset's framing."""
+        stored = self.data.get(self.profile(profile), {}).get(self.slot(slot))
+        if stored is None:
+            return False
+        self.put(profile, slot, {**stored, 'photo': self.photo(photo)})
+        return True
 
     def put(self, profile, slot, value):
         self.profile(profile)
@@ -146,11 +175,33 @@ class Engine:
         self.udp_error = None
         self.move_at = 0.0
         self.contact_lost = False
+        self.capture_at = None
+        self.auto_capture = True
+        self.settle_at = None
+        # Which preset the next photo belongs to, so a saved shot can show the
+        # framing it stored rather than a list of coordinates.
+        self.photo_for = None
+        # Which preset is being moved to, so the button the operator pressed can
+        # say what it is doing. Feedback belongs where the press happened.
+        self.recall_slot = None
+        # Connections that arrived on the loopback UI port, i.e. someone sitting
+        # at the VRChat PC. Registered by the server, which is the only place
+        # that can tell where a connection came from.
+        self.local_clients = set()
+        self.was_moving = False
 
     def emit(self, name, values, types):
         # No browser-provided endpoint, host, port, file path or /input controls.
         self.send('/usercamera/' + name, values, types)
         self.sent += 1
+
+    def capture(self, now):
+        """Ask VRChat for a photo. False when the shutter is still cooling off."""
+        if self.capture_at is not None and now - self.capture_at < CAPTURE_SECONDS:
+            return False
+        self.capture_at = now
+        self.emit('Capture', [True], 'T')
+        return True
 
     def moving(self):
         return self.transition is not None or any(self.axes) or any(self.velocity)
@@ -184,6 +235,7 @@ class Engine:
         self.axes = [0.0] * 5
         self.velocity = [0.0] * 5
         self.transition = None
+        self.recall_slot = None
         self.reason = reason
         if disarm:
             self.armed = False
@@ -192,7 +244,11 @@ class Engine:
 
     def release(self, client):
         if self.owner == client:
-            self.stop('Operator released / disconnected')
+            # Leaving stops the camera but does not un-know where it is. ARM
+            # means "this position is known", which has nothing to do with who
+            # is driving, so the next operator does not re-arm for a tab that
+            # was closed. Motion never carries over: every move resyncs first.
+            self.stop('Operator released / disconnected', disarm=False)
             self.owner = None
 
     def note_traffic(self):
@@ -235,22 +291,35 @@ class Engine:
         if not isinstance(msg, dict) or not isinstance(msg.get('op'), str):
             raise ValueError('Expected a command object')
         op, now = msg['op'], self.clock()
-        if op == 'stop':  # Every authenticated observer may stop motion.
+        if op == 'stop':
+            # The emergency brake belongs to the person who can see the screen
+            # and the room, not to a remote operator working from a photo.
+            if client not in self.local_clients:
+                raise ValueError('STOP is only available at the VRChat PC')
             self.stop('Emergency STOP')
             return
-        if op == 'claim':
-            if self.owner is not None and self.owner != client and now - self.lease_at <= LEASE_SECONDS:
+        if op in ('claim', 'takeover'):
+            # Claiming is polite and fails against a live operator, because the
+            # page claims by itself on load and opening a tab must never take
+            # the camera from whoever is driving. Taking it over is the explicit
+            # act for when it has to happen anyway, and it is logged as one.
+            if op == 'claim' and self.owner is not None and self.owner != client                     and now - self.lease_at <= LEASE_SECONDS:
                 raise ValueError('Another operator holds control')
             if self.owner != client:
-                self.stop('Control acquired; arm from feedback')
+                taken = op == 'takeover' and self.owner is not None
+                self.stop('Control taken over' if taken
+                          else 'Control acquired' if self.armed
+                          else 'Control acquired; arm from feedback', disarm=False)
             self.owner, self.lease_at = client, now
             return
         if self.owner != client or now - self.lease_at > LEASE_SECONDS:
             if self.owner == client:
                 self.release(client)
             raise ValueError('Acquire control first')
+        # Any command is proof the operator is still there, not only a heartbeat.
+        self.lease_at = now
         if op == 'heartbeat':
-            self.lease_at = now
+            pass
         elif op == 'release':
             self.release(client)
         elif op == 'set':
@@ -269,13 +338,22 @@ class Engine:
         elif op == 'profile':
             self.profile = Presets.profile(msg.get('value'))
             self.stop('Venue changed; re-arm in the correct world')
-            self.pose_at = None  # Do not reuse a previous world's feedback.
+            # Forget where the camera was, not merely when we heard it: another
+            # world's coordinates must never be saved or moved to as if current.
+            self.observed.pop('Pose', None)
+            self.pose = None
+            self.pose_at = None
         elif op == 'arm':
             if not self.enable_pose:
                 raise ValueError('Pose writes disabled: start with --enable-pose-write for rehearsal')
-            # The one explicit handshake: prove the camera is live before taking it.
-            if self.pose_at is None or now - self.pose_at > POSE_SECONDS:
-                raise ValueError('No recent Pose feedback; open/move the VRChat camera first')
+            # Arming takes the last position VRChat reported, however long ago.
+            # Within one server lifetime that report IS the camera: VRChat sends
+            # Pose whenever it changes, so silence means the camera has not
+            # moved. Demanding a report from the last five seconds meant framing
+            # a shot, reaching the browser and pressing ARM inside that window,
+            # which is not a thing an operator can do. Liveness is proven where
+            # it matters instead: every move resyncs first, and contact loss
+            # stops motion within five seconds of starting it.
             if self.observed.get('Mode') == 0:
                 raise ValueError('Open the VRChat camera first')
             if self.observed.get('Lock') or self.observed.get('LookAtMe'):
@@ -302,9 +380,23 @@ class Engine:
             self.input_at = now
             if any(axes):
                 self.transition = None
+                self.recall_slot = None  # Taking the camera by hand ends the recall.
             else:
                 # Button release is a hard stop, never an inertial drift.
                 self.velocity = [0.0] * 5
+        elif op == 'capture':
+            # Ask VRChat to take the photo; the file is VRChat's to write and
+            # name. We only ever read the newest one back, never a named path.
+            if self.observed.get('Mode') == 0:
+                raise ValueError('Open the VRChat camera first')
+            if not self.capture(now):
+                raise ValueError('Capture again in a moment')
+        elif op == 'autoCapture':
+            if type(msg.get('value')) is not bool:
+                raise ValueError('A boolean is required')
+            self.auto_capture = msg['value']
+            if not self.auto_capture:
+                self.settle_at = None
         elif op == 'save':
             # Save what VRChat last reported. Feedback is change-only, so a still
             # camera goes quiet within seconds and demanding fresh feedback here
@@ -317,10 +409,15 @@ class Engine:
                 raise ValueError('Need observed Zoom; move its slider in VRChat first')
             if self.transition or any(self.axes) or any(self.velocity):
                 raise ValueError('Stop camera movement before saving')
-            self.presets.put(self.profile, msg.get('slot'), {
+            slot = msg.get('slot')
+            self.presets.put(self.profile, slot, {
                 'name': msg.get('name'), 'pose': list(self.observed['Pose']),
                 'zoom': self.observed['Zoom'],
             })
+            # The camera is framed and still at this exact moment, which is the
+            # only moment a picture of this preset can be taken.
+            if self.auto_capture and self.observed.get('Mode') != 0 and not self.contact_lost                     and self.capture(now):
+                self.photo_for = (self.profile, slot)
         elif op == 'recall':
             if not self.armed:
                 raise ValueError('Arm from observed Pose first')
@@ -341,6 +438,7 @@ class Engine:
                 zoom = target['zoom']
             self.stop('Preset transition', disarm=False)
             self.transition = (now, duration, start, zoom, target)
+            self.recall_slot = slot
         else:
             raise ValueError('Unknown command')
 
@@ -349,7 +447,22 @@ class Engine:
         if self.owner is not None and now - self.lease_at > LEASE_SECONDS:
             self.release(self.owner)
         if not self.armed:
+            self.settle_at, self.was_moving = None, False
             return
+        # The operator cannot see the camera, so "did it actually get there?"
+        # has no answer once a move ends. Take one photo when it comes to rest,
+        # and drop it if the camera starts moving again: a picture of the way
+        # there confirms nothing. Starting a new move cancels the pending shot.
+        moving = self.moving()
+        if moving:
+            self.settle_at = None
+        elif self.was_moving and self.auto_capture:
+            self.settle_at = now + SETTLE_SECONDS
+        self.was_moving = moving
+        if self.settle_at is not None and now >= self.settle_at:
+            self.settle_at = None
+            if not self.contact_lost and self.observed.get('Mode') != 0:
+                self.capture(now)
         # VRChat only emits Pose when it changes, so an idle camera always goes
         # quiet: silence alone never disarms. Once we move, VRChat echoes our own
         # writes, so continued silence means we lost contact. Measure from the
@@ -407,11 +520,15 @@ class Engine:
             'poseWriteEnabled': self.enable_pose, 'profile': self.profile,
             'observed': self.observed, 'requested': self.requested,
             'commandedPose': self.pose, 'transitioning': self.transition is not None,
+            'moving': self.moving(), 'recallSlot': self.recall_slot,
             'oscAge': None if self.last_osc_at is None else round(now - self.last_osc_at, 2),
             'anyOscAge': None if self.any_osc_at is None else round(now - self.any_osc_at, 2),
             'poseAge': None if self.pose_at is None else round(now - self.pose_at, 2),
             'reason': self.reason, 'sent': self.sent, 'invalidOsc': self.invalid_osc,
             'contactLost': self.contact_lost,
+            'captureAge': None if self.capture_at is None else round(now - self.capture_at, 2),
+            'autoCapture': self.auto_capture,
+            'settling': self.settle_at is not None,
             'udpError': self.udp_error,
             'presets': self.presets.data.get(self.profile, {}),
         }

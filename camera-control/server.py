@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import socket
 import time
 from urllib.parse import urlsplit
 
@@ -14,12 +15,14 @@ from aiohttp import web, WSMsgType
 
 from engine import Engine, Presets
 from osc_codec import encode, decode
+from photos import Photos, TYPES
 
 ROOT = Path(__file__).resolve().parent
 ENGINE = web.AppKey('engine', Engine)
 CONFIG = web.AppKey('config', object)
 CLIENTS = web.AppKey('clients', set)
 OPERATORS = web.AppKey('operators', dict)
+PHOTOS = web.AppKey('photos', object)
 HEADERS = {
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; "
                                "connect-src 'self'; img-src 'self'; base-uri 'none'; "
@@ -40,6 +43,7 @@ class Config:
     remote_port: int | None = None
     enable_pose: bool = False
     presets: Path = ROOT / '.data' / 'presets.json'
+    photo_dir: Path | None = None
 
     def __post_init__(self):
         for value in (self.port, self.feedback_port, self.osc_port):
@@ -63,6 +67,9 @@ class Config:
             if (type(self.forward_port) is not int or not 1 <= self.forward_port <= 65535
                     or self.forward_port in (self.feedback_port, self.osc_port)):
                 raise ValueError('Forward port must differ from OSC input and output')
+        if self.photo_dir is not None and not (
+                isinstance(self.photo_dir, Path) and self.photo_dir.is_absolute()):
+            raise ValueError('--photo-dir must be an absolute directory path')
         if self.public_origin:
             origin = urlsplit(self.public_origin)
             if (origin.scheme != 'https' or not origin.hostname or origin.username
@@ -98,8 +105,13 @@ def response_headers(config, origins=None):
 
 
 class Feedback(asyncio.DatagramProtocol):
-    def __init__(self, engine, config):
+    def __init__(self, engine, config, forward=None):
         self.engine, self.config, self.transport = engine, config, None
+        # The optional fan-out gets its own socket. Windows reports a closed
+        # destination as an error on the socket that sent to it, so sharing one
+        # meant that an operator bridge which simply was not running stopped the
+        # camera and disarmed it, over and over, for as long as VRChat spoke.
+        self.forward = forward
 
     def connection_made(self, transport):
         self.transport = transport
@@ -107,9 +119,12 @@ class Feedback(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         if addr[0] != '127.0.0.1':
             return
-        if self.config.forward_port:
+        if self.config.forward_port and self.forward is not None:
             # Optional explicit fan-out; the existing operator bridge is unchanged.
-            self.transport.sendto(data, ('127.0.0.1', self.config.forward_port))
+            try:
+                self.forward.sendto(data, ('127.0.0.1', self.config.forward_port))
+            except OSError:
+                pass  # That consumer is not listening. Not this camera's problem.
         # Even a packet this codec rejects proves VRChat is sending to this port.
         self.engine.note_traffic()
         try:
@@ -120,6 +135,56 @@ class Feedback(asyncio.DatagramProtocol):
     def error_received(self, exc):
         self.engine.udp_error = str(exc)
         self.engine.stop('UDP error; check VRChat')
+
+
+# A photo takes a moment to be asked for, taken, written and noticed. Saying
+# so beats a preview that silently shows the previous shot for two seconds.
+PHOTO_WAIT = 10.0
+
+
+def awaiting_photo(engine, found):
+    """True while a shot has been asked for and the file is not here yet."""
+    if engine.settle_at is not None:
+        return True
+    if engine.capture_at is None:
+        return False
+    since = engine.clock() - engine.capture_at
+    if since > PHOTO_WAIT:
+        return False  # VRChat saved nothing; stop claiming one is coming.
+    # Durations, never a comparison between the two clocks these come from.
+    return found is None or time.time() - found[1] > since
+
+
+def link_photo(engine, photos):
+    """Give a saved preset the photo VRChat took for it, once the file exists."""
+    if photos is None or engine.photo_for is None or engine.capture_at is None:
+        return
+    since = engine.clock() - engine.capture_at
+    found = photos.newest()
+    if found is not None and time.time() - found[1] <= since:
+        profile, slot = engine.photo_for
+        engine.photo_for = None
+        with suppress(OSError, ValueError):
+            engine.presets.attach(profile, slot, found[0].name)
+    elif since > PHOTO_WAIT:
+        engine.photo_for = None  # VRChat never wrote one; stop waiting for it.
+
+
+def named(command):
+    """The op a client asked for, or a placeholder when the message never parsed."""
+    if isinstance(command, dict) and isinstance(command.get('op'), str):
+        return command['op'][:24]
+    return '<unparsed>'
+
+
+def journal(operator, op, outcome):
+    """One line per operator command, so a refusal exists outside the browser.
+
+    A control surface that refuses in the UI and records nothing anywhere else
+    cannot be diagnosed during a rehearsal, which is exactly when it has to be.
+    Heartbeats and motion are omitted: they are continuous and would bury this.
+    """
+    print(f'{time.strftime("%H:%M:%S")} {operator} {op}: {outcome}', flush=True)
 
 
 def parse_message(raw):
@@ -153,6 +218,50 @@ async def static_file(request):
     config = request.app[CONFIG]
     return web.FileResponse(ROOT / 'public' / names[request.path],
                             headers=response_headers(config, config.origins_for(arrived_on(request))))
+
+
+async def photo(request):
+    """The newest image in the configured folder. There is no path parameter.
+
+    The trailing segment is a cache key the UI copies from the state stream;
+    it is never read here, because a client naming a file is the one thing
+    this endpoint must not allow.
+    """
+    photos = request.app[PHOTOS]
+    found = photos.newest() if photos else None
+    if found is None:
+        raise web.HTTPNotFound(text='No camera photo yet' if photos
+                               else 'Photo preview is not configured')
+    path, _mtime = found
+    config = request.app[CONFIG]
+    return web.FileResponse(path, headers={
+        **response_headers(config, config.origins_for(arrived_on(request))),
+        'Content-Type': TYPES[path.suffix.lower()]})
+
+
+async def preset_photo(request):
+    """The photo taken when this preset was saved. The path names a preset.
+
+    Slot and venue are validated identifiers from our own store, and the file
+    name is the store's, not the caller's. The trailing segment is a cache key
+    and is never read.
+    """
+    photos, engine = request.app[PHOTOS], request.app[ENGINE]
+    if photos is None:
+        raise web.HTTPNotFound(text='Photo preview is not configured')
+    try:
+        profile = Presets.profile(request.match_info['profile'])
+        slot = Presets.slot(request.match_info['slot'])
+    except ValueError:
+        raise web.HTTPNotFound(text='No such preset')
+    stored = engine.presets.data.get(profile, {}).get(slot) or {}
+    path = photos.locate(stored['photo']) if stored.get('photo') else None
+    if path is None:
+        raise web.HTTPNotFound(text='That preset has no photo')
+    config = request.app[CONFIG]
+    return web.FileResponse(path, headers={
+        **response_headers(config, config.origins_for(arrived_on(request))),
+        'Content-Type': TYPES[path.suffix.lower()]})
 
 
 async def health(request):
@@ -193,7 +302,7 @@ async def websocket(request):
     if operator is None:
         # Reached the Serve port without a tailnet identity: Funnel or a bare proxy.
         raise web.HTTPForbidden(text='Tailscale identity required')
-    clients = request.app[CLIENTS]
+    clients, photos = request.app[CLIENTS], request.app[PHOTOS]
     if len(clients) >= 16:
         raise web.HTTPServiceUnavailable(text='Connection limit')
     ws = web.WebSocketResponse(max_msg_size=4096, heartbeat=10, compress=False)
@@ -214,15 +323,21 @@ async def websocket(request):
                 state = engine.state()
                 # Name the holder so a shared surface shows who is driving.
                 state['ownerName'] = operators.get(state['owner'])
-                await send({**state, 'client': client, 'operator': operator})
+                found = photos.newest() if photos else None
+                state['photoAt'] = round(found[1], 3) if found else None
+                state['awaitingPhoto'] = bool(photos) and awaiting_photo(engine, found)
+                await send({**state, 'client': client, 'operator': operator, 'canStop': local})
                 await asyncio.sleep(0.1)
         except (ConnectionError, RuntimeError, asyncio.TimeoutError):
             engine.release(client)
             await ws.close()
 
+    local = arrived_on(request) != config.remote_port
     try:
         await ws.prepare(request)
         request.app[OPERATORS][client] = operator
+        if local:
+            engine.local_clients.add(client)
         await send({'type': 'authenticated', 'client': client, 'operator': operator})
         publisher = asyncio.create_task(publish())
         window, count = time.monotonic(), 0
@@ -238,18 +353,23 @@ async def websocket(request):
                 engine.release(client)
                 await ws.close(code=1008, message=b'Rate limit')
                 break
+            command = None
             try:
                 command = parse_message(event.data)
                 engine.dispatch(client, command)
                 # Telemetry, not an 'applied' acknowledgement, shows camera state.
                 if command['op'] not in ('heartbeat', 'motion'):
+                    journal(operator, command['op'], 'accepted')
                     await send({'type': 'accepted', 'op': command['op']})
             except ValueError as exc:
+                journal(operator, named(command), f'refused: {exc}')
                 await send({'type': 'error', 'message': str(exc)[:180]})
             except (TypeError, OverflowError, RecursionError):
+                journal(operator, named(command), 'refused: invalid structure or value')
                 await send({'type': 'error', 'message': 'Invalid command structure or value.'})
-            except OSError:
+            except OSError as exc:
                 engine.stop('I/O error')
+                journal(operator, named(command), f'failed: {exc}')
                 await send({'type': 'error', 'message': 'Local OSC or preset I/O failed; check server.'})
     except (ValueError, TypeError, UnicodeError, RecursionError):
         await ws.close(code=1008, message=b'Invalid authentication message')
@@ -259,6 +379,7 @@ async def websocket(request):
             await ws.close()
     finally:
         engine.release(client)
+        engine.local_clients.discard(client)
         clients.discard(ws)
         request.app[OPERATORS].pop(client, None)
         if publisher:
@@ -280,12 +401,18 @@ def create_app(config):
 
     engine = Engine(send, Presets(config.presets), enable_pose=config.enable_pose)
     app[ENGINE] = engine
+    app[PHOTOS] = Photos(config.photo_dir) if config.photo_dir else None
 
     async def lifetime(_):
         nonlocal transport
         loop = asyncio.get_running_loop()
+        forward = None
+        if config.forward_port:
+            forward = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            forward.setblocking(False)
+            forward.bind(('127.0.0.1', 0))
         transport, _protocol = await loop.create_datagram_endpoint(
-            lambda: Feedback(engine, config), local_addr=('127.0.0.1', config.feedback_port))
+            lambda: Feedback(engine, config, forward), local_addr=('127.0.0.1', config.feedback_port))
 
         async def motion_loop():
             previous = time.monotonic()
@@ -294,6 +421,7 @@ def create_app(config):
                 now = time.monotonic()
                 try:
                     engine.tick(now - previous)
+                    link_photo(engine, app[PHOTOS])
                 except (OSError, ValueError, OverflowError):
                     engine.stop('Motion output failed; re-arm after checking server')
                 previous = now
@@ -308,6 +436,8 @@ def create_app(config):
                 await task
             transport.close()
             transport = None
+            if forward is not None:
+                forward.close()
 
     async def shutdown(_):
         engine.stop('Server shutting down')
@@ -319,6 +449,11 @@ def create_app(config):
     for path in ('/', '/app.js', '/style.css'):
         app.router.add_get(path, static_file)
     app.router.add_get('/healthz', health)
+    for path in ('/photo', r'/photo/{stamp:\d{1,20}}'):
+        app.router.add_get(path, photo)
+    for path in ('/preset-photo/{profile}/{slot}',
+                 r'/preset-photo/{profile}/{slot}/{key:[A-Za-z0-9._-]{1,120}}'):
+        app.router.add_get(path, preset_photo)
     app.router.add_get('/ws', websocket)
     return app
 
@@ -350,12 +485,16 @@ def main():
                         help='Separate loopback port for Tailscale Serve to forward to')
     parser.add_argument('--enable-pose-write', action='store_true')
     parser.add_argument('--presets', type=Path, default=ROOT / '.data' / 'presets.json')
+    parser.add_argument('--photo-dir', type=Path, default=(
+        Path(os.environ['CAMERA_PHOTO_DIR']) if os.environ.get('CAMERA_PHOTO_DIR') else None),
+        help='Folder VRChat saves photos in, e.g. the Pictures/VRChat folder')
     args = parser.parse_args()
     try:
         config = Config(port=args.port, feedback_port=args.feedback_port,
                         osc_port=args.osc_port, forward_port=args.forward_port,
                         public_origin=args.public_origin, remote_port=args.remote_port,
-                        enable_pose=args.enable_pose_write, presets=args.presets)
+                        enable_pose=args.enable_pose_write, presets=args.presets,
+                        photo_dir=args.photo_dir.expanduser().resolve() if args.photo_dir else None)
         app = create_app(config)
         print(f'Camera UI: http://127.0.0.1:{config.port}', flush=True)
         print('Remote access: ' + (
@@ -363,6 +502,8 @@ def main():
             if config.public_origin else 'localhost only'), flush=True)
         print(f'OSC feedback: 127.0.0.1:{config.feedback_port}; send: 127.0.0.1:{config.osc_port}', flush=True)
         print('Pose writes: EXPERIMENTAL ENABLED' if config.enable_pose else 'Pose writes: disabled', flush=True)
+        print(f'Photo preview: {config.photo_dir}' if config.photo_dir
+              else 'Photo preview: disabled (pass --photo-dir)', flush=True)
         ports = [config.port] + ([config.remote_port] if config.remote_port else [])
         run_sites(app, ports)
     except (ValueError, OSError) as exc:
