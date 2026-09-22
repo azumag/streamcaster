@@ -57,7 +57,9 @@ select{margin-left:8px}
 #photoWait{position:absolute;left:0;right:0;top:0;bottom:26px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border-radius:10px;background:rgba(8,13,19,.74);font-size:13px;letter-spacing:.06em}
 #photoWait::before{content:"";width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin 900ms linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:reduce){#photoWait::before{animation:none;border-top-color:var(--accent);opacity:.6}}
+button.busy{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-color:var(--accent);color:var(--accent)}
+button.busy::before{content:"";width:13px;height:13px;flex:none;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin 900ms linear infinite}
+@media(prefers-reduced-motion:reduce){#photoWait::before,button.busy::before{animation:none;opacity:.6}}
 #photo{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#080d13;border:1px solid var(--line);border-radius:10px}
 #photoState{margin-top:8px;font-size:13px;color:var(--muted)}
 

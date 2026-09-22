@@ -108,6 +108,11 @@ function render(s) {
   }
   for (let i = 1; i <= 8; i++) {
     const saved = s.presets[String(i)], name = $('name'+i);
+    // The operator is looking at the button they pressed, not at the preview.
+    const recall = document.querySelector(`[data-recall="${i}"]`);
+    const busy = s.recallSlot === String(i) && (s.moving ? '移動中…' : s.awaitingPhoto ? '撮影中…' : '');
+    recall.textContent = busy || '呼出';
+    recall.classList.toggle('busy', !!busy);
     $('presetState'+i).textContent = saved ? saved.name : '未保存';
     $('presetValue'+i).textContent = saved
       ? `Zoom ${saved.zoom.toFixed(1)} / x ${saved.pose[0].toFixed(2)} y ${saved.pose[1].toFixed(2)} z ${saved.pose[2].toFixed(2)}`
@@ -132,6 +137,8 @@ function render(s) {
   // The picture on screen is only ever the last one taken. While the camera is
   // on its way, and until the new file lands, say so - a stale frame otherwise
   // reads as the shot that was just asked for.
+  $('capture').textContent = !s.recallSlot && s.awaitingPhoto ? '撮影中…' : '撮影';
+  $('capture').classList.toggle('busy', !s.recallSlot && !!s.awaitingPhoto);
   const pending = s.moving ? '移動中…' : s.awaitingPhoto ? '撮影中…' : '';
   $('photoWait').textContent = pending;
   $('photoWait').hidden = !pending;

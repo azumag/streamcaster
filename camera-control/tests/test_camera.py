@@ -359,6 +359,20 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(self.engine.state()['moving'])
         self.command(op='motion',axes=[1,0,0,0,0]); self.step()
         self.assertTrue(self.engine.state()['moving'])
+    def test_state_names_the_preset_being_moved_to(self):
+        # The recall button has to say what it is doing; that needs the slot.
+        self.store.put('default','2',{'name':'stage','pose':[20,2,20,0,0,0],'zoom':85})
+        self.assertIsNone(self.engine.state()['recallSlot'])
+        self.command(op='recall',slot='2',duration=2.5)
+        self.assertEqual(self.engine.state()['recallSlot'],'2')
+        self.idle(3)
+        # Still named after landing, so the button can say 撮影中 while it waits.
+        self.assertEqual(self.engine.state()['recallSlot'],'2')
+        self.command(op='motion',axes=[1,0,0,0,0])
+        self.assertIsNone(self.engine.state()['recallSlot'])
+        self.command(op='recall',slot='2',duration=2.5)
+        self.command(op='stop')
+        self.assertIsNone(self.engine.state()['recallSlot'])
     def test_saving_a_preset_photographs_the_shot_it_stored(self):
         self.command(op='save',slot='1',name='CAM 1')
         self.assertIn(('/usercamera/Capture',[True],'T'),self.sent)

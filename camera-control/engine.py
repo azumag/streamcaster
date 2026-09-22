@@ -181,6 +181,9 @@ class Engine:
         # Which preset the next photo belongs to, so a saved shot can show the
         # framing it stored rather than a list of coordinates.
         self.photo_for = None
+        # Which preset is being moved to, so the button the operator pressed can
+        # say what it is doing. Feedback belongs where the press happened.
+        self.recall_slot = None
         self.was_moving = False
 
     def emit(self, name, values, types):
@@ -228,6 +231,7 @@ class Engine:
         self.axes = [0.0] * 5
         self.velocity = [0.0] * 5
         self.transition = None
+        self.recall_slot = None
         self.reason = reason
         if disarm:
             self.armed = False
@@ -357,6 +361,7 @@ class Engine:
             self.input_at = now
             if any(axes):
                 self.transition = None
+                self.recall_slot = None  # Taking the camera by hand ends the recall.
             else:
                 # Button release is a hard stop, never an inertial drift.
                 self.velocity = [0.0] * 5
@@ -414,6 +419,7 @@ class Engine:
                 zoom = target['zoom']
             self.stop('Preset transition', disarm=False)
             self.transition = (now, duration, start, zoom, target)
+            self.recall_slot = slot
         else:
             raise ValueError('Unknown command')
 
@@ -495,7 +501,7 @@ class Engine:
             'poseWriteEnabled': self.enable_pose, 'profile': self.profile,
             'observed': self.observed, 'requested': self.requested,
             'commandedPose': self.pose, 'transitioning': self.transition is not None,
-            'moving': self.moving(),
+            'moving': self.moving(), 'recallSlot': self.recall_slot,
             'oscAge': None if self.last_osc_at is None else round(now - self.last_osc_at, 2),
             'anyOscAge': None if self.any_osc_at is None else round(now - self.any_osc_at, 2),
             'poseAge': None if self.pose_at is None else round(now - self.pose_at, 2),
