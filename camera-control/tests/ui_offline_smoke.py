@@ -5,11 +5,12 @@ from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[1]/'public'
 FAKE=r'''
 window.cameraTest={messages:[]};
-const fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,udpError:null,photoAt:null,presets:{}};
+const fixture=window.fixture={type:'state',client:'offline',owner:null,armed:false,poseWriteEnabled:true,profile:'default',observed:{Pose:[10,2,20,0,0,0],Zoom:45,Mode:2},requested:{},commandedPose:null,transitioning:false,oscAge:0,anyOscAge:0,poseAge:0,reason:'Offline UI fixture',sent:0,invalidOsc:0,contactLost:false,captureAge:null,udpError:null,photoAt:null,presets:{}};
 window.WebSocket=class extends EventTarget {
  static OPEN=1;
- constructor(){super();this.readyState=1;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
+ constructor(){super();this.readyState=1;cameraTest.socket=this;queueMicrotask(()=>{this.dispatchEvent(new Event('open'));
   this.event({type:'authenticated',client:'offline',operator:'localhost'});this.event(fixture);});}
+ get fixture(){return fixture;}
  event(data){this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify(data)}));}
  send(raw){const m=JSON.parse(raw);cameraTest.messages.push(m);
  if(m.op==='claim')fixture.owner='offline';
@@ -81,6 +82,15 @@ async def main():
   await page.locator('#capture').click()
   assert [m for m in await page.evaluate('cameraTest.messages') if m.get('op')=='capture']
   assert (await page.locator('#photo').get_attribute('src')).endswith('/photo/1758412345500')
+  # After a restart VRChat has reported nothing, and change-only feedback means
+  # it stays that way until the camera moves. Say so before 保存 is pressed.
+  assert await page.locator('#saveReady').is_hidden()
+  await page.evaluate("cameraTest.socket.event({...cameraTest.socket.fixture, observed:{}})")
+  assert 'カメラを一度動かして' in await page.locator('#saveReady').text_content()
+  await page.evaluate("cameraTest.socket.event({...cameraTest.socket.fixture, observed:{Pose:[1,2,3,0,0,0]}})")
+  assert 'Zoom' in await page.locator('#saveReady').text_content()
+  await page.evaluate("cameraTest.socket.event(cameraTest.socket.fixture)")
+  assert await page.locator('#saveReady').is_hidden()
   await page.locator('[data-recall="1"]').click();await page.locator('#stop').click()
   assert await page.locator('[data-axis]').first.is_disabled()
   # Remove the deliberate XSS fixture from the presentation screenshot.

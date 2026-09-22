@@ -83,6 +83,16 @@ function render(s) {
       name.dataset.profile = s.profile;
     }
   }
+  // What保存 needs, said before it is pressed. VRChat reports position only
+  // when it changes, so after any restart the server has nothing to save and
+  // the operator has to nudge the camera once - which used to be discoverable
+  // only by pressing save and reading a refusal.
+  $('saveReady').textContent = s.contactLost
+    ? '接触喪失：VRChat内でカメラを動かすと復帰します。'
+    : !s.observed.Pose ? 'VRChat内でカメラを一度動かしてください（位置を未受信）。'
+    : s.observed.Zoom === undefined ? 'VRChatでZoomスライダーを一度動かしてください（Zoomを未受信）。'
+    : '';
+  $('saveReady').hidden = !$('saveReady').textContent;
   showPhoto(s.photoAt);
   // Never fire change events or automatically resend controls from feedback.
   // Inputs represent operator intentions; observed values are shown separately.

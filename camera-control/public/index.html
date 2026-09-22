@@ -32,6 +32,7 @@
 </section>
 </div>
 <section class="panel"><h2>03 / 会場別プリセット</h2><div class="actions"><label>会場ID（ワールド移動時は必ず変更）<input id="profile" value="default" maxlength="40" pattern="[A-Za-z0-9_-]+" disabled></label><button id="setProfile" disabled>会場を切替</button><label>移動時間<select id="duration"><option value="0">CUT（即時）</option><option value="1">1秒</option><option value="2.5" selected>2.5秒</option><option value="5">5秒</option><option value="10">10秒</option></select></label></div>
+<p id="saveReady" class="warning">未接続</p>
 <div class="preset-grid" id="presets"></div><p class="muted">保存するのはOSCで受信した位置・Zoomです。VRChat内でカメラを動かし、Zoomを操作してから保存してください。会場IDは手動管理で、ワールドの自動識別は行いません。</p></section>
 <section class="panel"><h2>04 / 撮影プレビュー <span>VRCHAT PHOTO</span></h2><p class="muted">VRChatに写真を撮らせ、保存された最新の1枚を表示します。映像モニターの代わりではなく、構図確認用の静止画です。</p>
 <div class="actions"><button id="capture" disabled>撮影</button><span class="muted">保存フォルダは起動時の <code>--photo-dir</code> 設定のみ。UIからパスは指定できません。</span></div>
