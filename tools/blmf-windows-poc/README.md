@@ -177,9 +177,10 @@ writes on exit, so killing it loses the session's changes). `-NoObs`, `-NoCamera
 and `-NoBrowser` skip parts; `-Force` stops a camera server left from an earlier
 run. `Start-BLMF-Local.cmd` is the double-clickable wrapper.
 
-Running it again is how a closed OBS is brought back. If the controller is
-already up, the launcher leaves it alone, starts only the OBS instances that are
-not running, waits for both to be ready and asks the controller to reconnect.
+Running it again is how anything that was closed is brought back. If the
+controller is already up, the launcher leaves it alone, starts the camera control
+if it has stopped and only the OBS instances that are not running, waits for both
+OBS to be ready and asks the controller to reconnect.
 Everything already running is left as it is, so pressing the shortcut twice
 starts nothing twice.
 

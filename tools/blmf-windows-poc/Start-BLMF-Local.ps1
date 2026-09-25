@@ -294,19 +294,6 @@ function Wait-For ($label, $check, $seconds) {
     return $false
 }
 
-$existing = Get-ControllerState
-if ($existing -and $existing.service -eq 'blmf-manual-osc') {
-    Write-Ok "OSC コントローラは起動済みです ($Origin)"
-    # OBS だけ手で閉じた後にショートカットを押し直すのが普通の再起動手順。
-    # 以前はここでブラウザを開いて終わっていたため、閉じた OBS が二度と
-    # 立ち上がらなかった。コントローラはそのままに、足りない OBS だけ起こす。
-    if (-not $NoObs) {
-        if (Start-MissingObs) { Write-ObsConnection (Request-ControllerReconnect) }
-    }
-    if (-not $NoBrowser) { Start-Process $Origin }
-    return
-}
-
 # VRChat の OSC 送信先は受信で確かめる。
 # VRChat は Easy Anti-Cheat 下でコマンドラインを読めず、Steam は起動中
 # localconfig.vdf を書き出さないので、どちらを見ても「未設定」に見えることがある。
@@ -403,6 +390,30 @@ function Start-CameraControl {
     Write-Warn2 'カメラコントロールを起動できませんでした'
     if (Test-Path $err) { Get-Content $err -Tail 10 | ForEach-Object { Write-Info $_ } }
     return $false
+}
+
+# ---------------------------------------------------------------- 起動済みの場合
+
+$existing = Get-ControllerState
+if ($existing -and $existing.service -eq 'blmf-manual-osc') {
+    Write-Ok "OSC コントローラは起動済みです ($Origin)"
+    # 一部だけ手で閉じた後にショートカットを押し直すのが普通の再起動手順。
+    # 以前はここでブラウザを開いて終わっていたため、閉じた OBS やカメラ
+    # コントロールが二度と立ち上がらなかった。コントローラはそのままに、
+    # 止まっているものだけ起こす。動いているものには触らない。
+    $cameraOn = $false
+    if ((-not $NoCamera) -and $cam.enabled) {
+        Write-Step 'カメラコントロールを起動します (中継構成)'
+        $cameraOn = Start-CameraControl
+    }
+    if (-not $NoObs) {
+        if (Start-MissingObs) { Write-ObsConnection (Request-ControllerReconnect) }
+    }
+    if (-not $NoBrowser) {
+        Start-Process $Origin
+        if ($cameraOn) { Start-Process "http://127.0.0.1:$($cam.uiPort)" }
+    }
+    return
 }
 
 $cameraOn = $false
