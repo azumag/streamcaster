@@ -221,9 +221,88 @@ Write-Ok '必要なファイルを確認しました'
 $node = Get-Command node.exe -ErrorAction SilentlyContinue
 if (-not $node) { Write-Err2 'node.exe が見つかりません'; exit 1 }
 
+# ---------------------------------------------------------------- OBS 起動の部品
+
+function Start-PortableObs ($label, $obsRoot, $exe, $profileName) {
+    $running = Get-PortableObs $exe
+    if ($running) {
+        Write-Ok "$label OBS は起動済み (PID $($running.Id))"
+        return $false
+    }
+    $previous = $env:NDI_RUNTIME_DIR_V6
+    try {
+        $env:NDI_RUNTIME_DIR_V6 = Join-Path $obsRoot 'ndi-runtime'
+        Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -WindowStyle Normal `
+            -ArgumentList @('--portable', '--multi', '--disable-shutdown-check',
+                            '--profile', $profileName, '--collection', $profileName) | Out-Null
+    } finally { $env:NDI_RUNTIME_DIR_V6 = $previous }
+    Write-Ok "$label OBS を起動しました (profile/collection: $profileName)"
+    return $true
+}
+
+# 閉じられている OBS だけを起動し、両方の準備ができるまで待つ。
+# 起動したものが1台でもあれば $true (コントローラに再接続させる必要がある)。
+function Start-MissingObs {
+    Write-Step '専用 OBS を起動します (Sub -> Main)'
+    $started = [bool](Start-PortableObs 'Sub' $SubRoot $SubExe 'BLMF Windows Sub PoC')
+    if ($started) { Start-Sleep -Seconds 2 }
+    $started = [bool](Start-PortableObs 'Main' $MainRoot $MainExe 'BLMF_WINDOWS_LOCAL_TEST') -or $started
+    Write-Step 'OBS の準備を待ちます'
+    $subReady  = Wait-For 'Sub 観測 (local-sub-state.json が最新)' { Test-SubStateFresh } 90
+    $mainReady = Wait-For "Main WebSocket (TCP $MainWsPort)"       { Test-MainWebSocket } 90
+    if (-not $subReady) { Write-Info 'Sub OBS のツール > スクリプトに local-sub-observer.lua があるか確認してください。' }
+    if (-not $mainReady) { Write-Info "Main OBS の WebSocket サーバー設定 ($MainWsPort) を確認してください。" }
+    return $started
+}
+
+function Request-ControllerReconnect {
+    $state = Get-ControllerState
+    if ($state -and -not ($state.mainConnected -and $state.subConnected)) {
+        Write-Info 'OBS への再接続を要求します...'
+        try { $null = Invoke-ControllerAction 'reconnect' } catch { }
+        Start-Sleep -Seconds 2
+        $state = Get-ControllerState
+    }
+    return $state
+}
+
+function Write-ObsConnection ($state) {
+    Write-Info "Main OBS ($MainWsPort) : $(if($state.mainConnected){'接続'}else{'未接続'})  シーン: $($state.mainScene)"
+    Write-Info "Sub  OBS (file) : $(if($state.subConnected){'接続'}else{'未接続'})  シーン: $($state.subScene)"
+    if (-not $state.mainConnected) { Write-Warn2 'Main OBS 未接続 (プロファイル BLMF_WINDOWS_LOCAL_TEST か確認)' }
+    if (-not $state.subConnected)  { Write-Warn2 'Sub OBS 未接続 (Sub OBS と lua 観測を確認)' }
+}
+
+function Test-SubStateFresh {
+    if (-not (Test-Path -LiteralPath $SubState)) { return $false }
+    try { $s = Get-Content -LiteralPath $SubState -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $false }
+    if ($s.profile -ne 'BLMF Windows Sub PoC') { return $false }
+    $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$s.observedAt
+    return ($age -ge 0 -and $age -le 3)
+}
+
+function Test-MainWebSocket {
+    return [bool](Get-PortOwner $MainWsPort 'tcp')
+}
+
+function Wait-For ($label, $check, $seconds) {
+    for ($i = 0; $i -lt ($seconds * 2); $i++) {
+        if (& $check) { Write-Ok "$label OK"; return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    Write-Warn2 "$label が確認できませんでした (制限時間 $seconds 秒)"
+    return $false
+}
+
 $existing = Get-ControllerState
 if ($existing -and $existing.service -eq 'blmf-manual-osc') {
     Write-Ok "OSC コントローラは起動済みです ($Origin)"
+    # OBS だけ手で閉じた後にショートカットを押し直すのが普通の再起動手順。
+    # 以前はここでブラウザを開いて終わっていたため、閉じた OBS が二度と
+    # 立ち上がらなかった。コントローラはそのままに、足りない OBS だけ起こす。
+    if (-not $NoObs) {
+        if (Start-MissingObs) { Write-ObsConnection (Request-ControllerReconnect) }
+    }
     if (-not $NoBrowser) { Start-Process $Origin }
     return
 }
@@ -365,57 +444,11 @@ if ($httpOwner) {
 
 # ---------------------------------------------------------------- OBS 起動
 
-function Start-PortableObs ($label, $obsRoot, $exe, $profileName) {
-    $running = Get-PortableObs $exe
-    if ($running) {
-        Write-Ok "$label OBS は起動済み (PID $($running.Id))"
-        return
-    }
-    $previous = $env:NDI_RUNTIME_DIR_V6
-    try {
-        $env:NDI_RUNTIME_DIR_V6 = Join-Path $obsRoot 'ndi-runtime'
-        Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -WindowStyle Normal `
-            -ArgumentList @('--portable', '--multi', '--disable-shutdown-check',
-                            '--profile', $profileName, '--collection', $profileName) | Out-Null
-    } finally { $env:NDI_RUNTIME_DIR_V6 = $previous }
-    Write-Ok "$label OBS を起動しました (profile/collection: $profileName)"
-}
-
-function Test-SubStateFresh {
-    if (-not (Test-Path -LiteralPath $SubState)) { return $false }
-    try { $s = Get-Content -LiteralPath $SubState -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $false }
-    if ($s.profile -ne 'BLMF Windows Sub PoC') { return $false }
-    $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$s.observedAt
-    return ($age -ge 0 -and $age -le 3)
-}
-
-function Test-MainWebSocket {
-    return [bool](Get-PortOwner $MainWsPort 'tcp')
-}
-
-function Wait-For ($label, $check, $seconds) {
-    for ($i = 0; $i -lt ($seconds * 2); $i++) {
-        if (& $check) { Write-Ok "$label OK"; return $true }
-        Start-Sleep -Milliseconds 500
-    }
-    Write-Warn2 "$label が確認できませんでした (制限時間 $seconds 秒)"
-    return $false
-}
-
 if (-not $NoObs) {
-    Write-Step '専用 OBS を起動します (Sub -> Main)'
-    Start-PortableObs 'Sub'  $SubRoot  $SubExe  'BLMF Windows Sub PoC'
-    Start-Sleep -Seconds 2
-    Start-PortableObs 'Main' $MainRoot $MainExe 'BLMF_WINDOWS_LOCAL_TEST'
+    $null = Start-MissingObs
 } else {
     Write-Warn2 '-NoObs: OBS の起動はスキップします'
 }
-
-Write-Step 'OBS の準備を待ちます'
-$subReady  = Wait-For 'Sub 観測 (local-sub-state.json が最新)' { Test-SubStateFresh } 90
-$mainReady = Wait-For "Main WebSocket (TCP $MainWsPort)"       { Test-MainWebSocket } 90
-if (-not $subReady) { Write-Info 'Sub OBS のツール > スクリプトに local-sub-observer.lua があるか確認してください。' }
-if (-not $mainReady) { Write-Info "Main OBS の WebSocket サーバー設定 ($MainWsPort) を確認してください。" }
 
 # ---------------------------------------------------------------- OSC コントローラ
 
@@ -440,18 +473,9 @@ if (-not $state) {
 }
 Write-Ok "OSC コントローラ: $Origin (PID $($controller.Id))"
 
-if (-not ($state.mainConnected -and $state.subConnected)) {
-    Write-Info 'OBS への再接続を要求します...'
-    try { $null = Invoke-ControllerAction 'reconnect' } catch { }
-    Start-Sleep -Seconds 2
-    $state = Get-ControllerState
-}
-
-Write-Info "Main OBS ($MainWsPort) : $(if($state.mainConnected){'接続'}else{'未接続'})  シーン: $($state.mainScene)"
-Write-Info "Sub  OBS (file) : $(if($state.subConnected){'接続'}else{'未接続'})  シーン: $($state.subScene)"
+$state = Request-ControllerReconnect
+Write-ObsConnection $state
 Write-Info "OSC 受信        : $($state.udpEndpoint)"
-if (-not $state.mainConnected) { Write-Warn2 'Main OBS 未接続 (プロファイル BLMF_WINDOWS_LOCAL_TEST か確認)' }
-if (-not $state.subConnected)  { Write-Warn2 'Sub OBS 未接続 (Sub OBS と lua 観測を確認)' }
 
 # ---------------------------------------------------------------- VRChat 側の確認
 

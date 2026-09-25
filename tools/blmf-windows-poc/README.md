@@ -177,6 +177,12 @@ writes on exit, so killing it loses the session's changes). `-NoObs`, `-NoCamera
 and `-NoBrowser` skip parts; `-Force` stops a camera server left from an earlier
 run. `Start-BLMF-Local.cmd` is the double-clickable wrapper.
 
+Running it again is how a closed OBS is brought back. If the controller is
+already up, the launcher leaves it alone, starts only the OBS instances that are
+not running, waits for both to be ready and asks the controller to reconnect.
+Everything already running is left as it is, so pressing the shortcut twice
+starts nothing twice.
+
 It holds no machine paths. Copy `blmf-launcher.example.json` to
 `blmf-launcher.local.json` beside the script and edit it; `-ConfigPath` or
 `BLMF_LAUNCHER_CONFIG` override the location. Only `runtime.root` is required and
