@@ -1,7 +1,7 @@
 # StreamCaster
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Node.js](https://img.shields.io/badge/node.js-18%2B-green.svg)
+![Node.js](https://img.shields.io/badge/node.js-22.23.4-green.svg)
 ![Docker](https://img.shields.io/badge/docker-required-blue.svg)
 ![FFmpeg](https://img.shields.io/badge/ffmpeg-required-red.svg)
 
@@ -66,6 +66,8 @@ graph TD
 
 ### Prerequisites
 
+- Node.js 22.23.4 (see `.node-version`) for development; patched Node.js
+  24.22.1+ and 26.12.1+ are also allowed by `engines` within those major versions.
 - Docker & Docker Compose
 - 4GB+ RAM
 - 2+ CPU cores
@@ -77,8 +79,8 @@ graph TD
 git clone https://github.com/azumag/streamcaster.git
 cd streamcaster
 
-# Install dependencies
-npm install
+# Install locked dependencies using the Node.js version above
+npm ci
 
 # Prepare video directory
 mkdir -p videos
@@ -120,11 +122,11 @@ git clone https://github.com/azumag/streamcaster.git
 cd streamcaster
 
 # Install Node.js dependencies
-npm install
+npm ci
 
 # Install controller dependencies
 cd controller
-npm install
+npm ci --workspaces=false --ignore-scripts
 
 # Run tests
 npm test
@@ -151,12 +153,15 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```bash
 # Install system dependencies
 sudo apt update
-sudo apt install ffmpeg docker.io docker-compose nodejs npm
+sudo apt install ffmpeg docker.io docker-compose
+
+# Install the official Node.js version in .node-version, then verify node --version.
+# Distribution-provided nodejs packages can be older than the security release.
 
 # Clone and setup project
 git clone https://github.com/azumag/streamcaster.git
 cd streamcaster
-npm install
+npm ci
 
 # Configure environment
 cp .env.example .env

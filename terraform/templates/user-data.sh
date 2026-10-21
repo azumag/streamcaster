@@ -35,6 +35,7 @@ apt-get install -y \
     wget \
     git \
     unzip \
+    xz-utils \
     htop \
     tree \
     jq \
@@ -141,8 +142,25 @@ EOF
 
 # === INSTALL NODE.JS (for development/debugging if needed) ===
 echo "Installing Node.js..."
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt-get install -y nodejs
+NODE_VERSION="$(cat "$APP_DIR/.node-version")"
+case "$(dpkg --print-architecture)" in
+  amd64) NODE_ARCH=x64 ;;
+  arm64) NODE_ARCH=arm64 ;;
+  *) echo "Unsupported Node.js architecture" >&2; exit 1 ;;
+esac
+NODE_ARCHIVE="node-v$NODE_VERSION-linux-$NODE_ARCH.tar.xz"
+NODE_DOWNLOAD_DIR=$(mktemp -d)
+(
+  cd "$NODE_DOWNLOAD_DIR"
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+    "https://nodejs.org/dist/v$NODE_VERSION/$NODE_ARCHIVE" -o "$NODE_ARCHIVE"
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+    "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" -o SHASUMS256.txt
+  awk -v archive="$NODE_ARCHIVE" '$2 == archive' SHASUMS256.txt | sha256sum --check --status
+  tar --extract --xz --file "$NODE_ARCHIVE" --directory /usr/local --strip-components=1 --no-same-owner
+)
+rm -rf -- "$NODE_DOWNLOAD_DIR"
+test "$(/usr/local/bin/node -p 'process.versions.node')" = "$NODE_VERSION"
 
 # === SET PROPER PERMISSIONS ===
 echo "Setting proper permissions..."

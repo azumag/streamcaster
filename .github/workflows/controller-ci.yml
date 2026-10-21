@@ -4,12 +4,22 @@ on:
   push:
     branches: [main, development, 'feature/**', 'fix/**']
     paths:
+      - '.node-version'
       - 'controller/**'
+      - 'package*.json'
+      - 'Dockerfile.controller'
+      - '.dockerignore'
+      - '.devcontainer/Dockerfile'
       - '.github/workflows/controller-ci.yml'
   pull_request:
     branches: [main, development]
     paths:
+      - '.node-version'
       - 'controller/**'
+      - 'package*.json'
+      - 'Dockerfile.controller'
+      - '.dockerignore'
+      - '.devcontainer/Dockerfile'
       - '.github/workflows/controller-ci.yml'
 
 jobs:
@@ -19,7 +29,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [18.x, 20.x, 22.x]
+        node-version: ['22.23.4', '24.22.1']
 
     steps:
       - name: Checkout code
@@ -34,18 +44,22 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./controller
-        run: npm ci
+        run: npm ci --workspaces=false --ignore-scripts
 
       - name: Run lint
         working-directory: ./controller
         run: npm run lint
+
+      - name: Audit locked dependencies
+        working-directory: ./controller
+        run: npm audit --workspaces=false --audit-level=high
 
       - name: Run tests
         working-directory: ./controller
         run: npm run test:coverage
 
       - name: Upload coverage reports to Codecov
-        if: matrix.node-version == '20.x'
+        if: matrix.node-version == '22.23.4'
         uses: codecov/codecov-action@v4
         with:
           directory: ./controller/coverage
@@ -62,10 +76,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Use Node.js 20.x
+      - name: Use pinned Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
+          node-version-file: '.node-version'
           cache: 'npm'
           cache-dependency-path: controller/package-lock.json
 
@@ -76,7 +90,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./controller
-        run: npm ci
+        run: npm ci --workspaces=false --ignore-scripts
 
       - name: Create test video files
         working-directory: ./videos
@@ -154,88 +168,19 @@ jobs:
           sarif_file: 'trivy-controller.sarif'
           category: 'trivy-controller'
 
-  # docker-test:
-  #   name: Docker Build Test
-  #   runs-on: ubuntu-latest
-  #   needs: test
-  #   
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  # 
-  #     - name: Set up Docker Buildx
-  #       uses: docker/setup-buildx-action@v3
-  # 
-  #     - name: Create Dockerfile for controller
-  #       run: |
-  #         cat > controller/Dockerfile << 'EOF'
-  #         FROM node:20-alpine
-  #         
-  #         WORKDIR /app
-  #         
-  #         # Install FFmpeg
-  #         RUN apk add --no-cache ffmpeg
-  #         
-  #         # Copy package files
-  #         COPY package*.json ./
-  #         
-  #         # Install dependencies
-  #         RUN npm ci --only=production
-  #         
-  #         # Copy application code
-  #         COPY . .
-  #         
-  #         # Create videos directory
-  #         RUN mkdir -p /app/videos
-  #         
-  #         # Expose port
-  #         EXPOSE 8080
-  #         
-  #         # Health check
-  #         HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  #           CMD curl -f http://localhost:8080/api/health || exit 1
-  #         
-  #         # Start application
-  #         CMD ["npm", "start"]
-  #         EOF
-  # 
-  #     - name: Build Docker image
-  #       uses: docker/build-push-action@v5
-  #       with:
-  #         context: ./controller
-  #         push: false
-  #         tags: udp-streaming-controller:test
-  #         cache-from: type=gha
-  #         cache-to: type=gha,mode=max
-  # 
-  #     - name: Test Docker image
-  #       run: |
-  #         # Run container in background
-  #         docker run -d --name controller-test -p 8080:8080 udp-streaming-controller:test
-  #         
-  #         # Wait for container to be ready
-  #         timeout=60
-  #         elapsed=0
-  #         while [ $elapsed -lt $timeout ]; do
-  #           if docker exec controller-test curl -f http://localhost:8080/api/health; then
-  #             echo "Container is ready!"
-  #             break
-  #           fi
-  #           echo "Waiting for container... ($elapsed/$timeout seconds)"
-  #           sleep 3
-  #           elapsed=$((elapsed + 3))
-  #         done
-  #         
-  #         if [ $elapsed -ge $timeout ]; then
-  #           echo "Container failed to start properly"
-  #           docker logs controller-test
-  #           exit 1
-  #         fi
-  #         
-  #         # Test basic endpoints
-  #         docker exec controller-test curl -f http://localhost:8080/api/status
-  #         docker exec controller-test curl -f http://localhost:8080/api/videos
-  #         
-  #         # Clean up
-  #         docker stop controller-test
-  #         docker rm controller-test
+  docker-test:
+    name: Build Controller Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.controller
+          push: false
+          tags: streamcaster-controller:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

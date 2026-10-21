@@ -43,7 +43,7 @@
     }
   },
   
-  "postCreateCommand": "sudo usermod -aG docker $(whoami) && sudo chown $(id -u):$(id -g) /var/run/docker.sock || true && npm install",
+  "postCreateCommand": "sudo usermod -aG docker $(whoami) && sudo chown $(id -u):$(id -g) /var/run/docker.sock || true && npm ci",
   
   "remoteUser": "node"
 }
