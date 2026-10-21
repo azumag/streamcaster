@@ -64,7 +64,7 @@ Requirements:
 
 - PC/PCVR VRChat client with OSC enabled.
 - Tailscale connected to the BLMF tailnet.
-- Node.js 18 or newer.
+- Node.js 22.23.4 (repository `.node-version`); see `package.json` for the patched 24/26 alternatives.
 - A unique `BLMF_BRIDGE_ID` for this machine.
 - A per-operator bearer token issued in the central `BLMF_OPERATORS_JSON` configuration.
 

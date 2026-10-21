@@ -3,12 +3,14 @@ name: Operator Bridge CI
 on:
   push:
     paths:
+      - '.node-version'
       - 'operator-bridge/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/operator-bridge-ci.yml'
   pull_request:
     paths:
+      - '.node-version'
       - 'operator-bridge/**'
       - 'package.json'
       - 'package-lock.json'
@@ -21,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 22.x]
+        node-version: ['22.23.4', '24.22.1']
 
     steps:
       - uses: actions/checkout@v4
@@ -30,5 +32,6 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high
       - run: npm run lint --workspace operator-bridge
       - run: npm test --workspace operator-bridge -- --runInBand

@@ -30,7 +30,7 @@ plugin binaries, footage, avatar/world assets, credentials, account settings or 
 
 ## Prerequisites and pinned distribution
 
-Use Windows x64, Node.js 20+, Python 3.10+ x64 and an RTX/NVENC-compatible driver.
+Use Windows x64, Node.js 22.23.4 (repository `.node-version`), Python 3.10+ x64 and an RTX/NVENC-compatible driver.
 The verified hardware was Windows 10 / i5-10400F / RTX 3060. Hardware performance
 is not guaranteed by configuration reproduction.
 
