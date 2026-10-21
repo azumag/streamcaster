@@ -28,6 +28,20 @@
     "jest": "^30.5.2",
     "supertest": "^6.3.3"
   },
+  "overrides": {
+    "dockerode@^4.0.2": {
+      "uuid": "11.1.1"
+    },
+    "googleapis-common@7": {
+      "uuid": "11.1.1"
+    },
+    "gaxios@6": {
+      "uuid": "11.1.1"
+    },
+    "@istanbuljs/load-nyc-config@1": {
+      "js-yaml": "4.3.2"
+    }
+  },
   "engines": {
     "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
   },
