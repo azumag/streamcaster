@@ -66,7 +66,7 @@ Windows実機、Google Drive実アカウント、OBS、配信先には接続し�
 ## 適用条件
 
 PRのmergeだけで既存コンテナ・ホスト・常駐プロセスが更新されるわけではない。
-既存のmain pushには本番deploy workflowがあるため、mergeは運用手順に沿って行う。
+本番deploy定義は `.github/workflows/deploy.yml.disable` として無効になっており、mainへのpushだけでは配備されない。運用手順に沿って別途配備する。
 適用時はコンテナを新しいbase/lockから再buildし、開発用containerと既存ホストのNodeも更新する。
 再起動後に実際のcontrollerの`process.version`を確認し、古いプロセスとTLSセッションが残っていないことを確認する。
 本変更の作業ではmerge、deploy、常駐プロセス再起動、配信操作は実施していない。
