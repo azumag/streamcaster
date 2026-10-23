@@ -7,7 +7,6 @@ services:
       dockerfile: .devcontainer/Dockerfile
     volumes:
       - ..:/workspace:cached
-      - /var/run/docker.sock:/var/run/docker.sock
       - claude-code-config:/home/node/.config/claude-code
     command: sleep infinity
     network_mode: host
