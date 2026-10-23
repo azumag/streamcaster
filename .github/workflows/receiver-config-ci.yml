@@ -1,0 +1,32 @@
+name: Receiver RTMP Config CI
+
+on:
+  pull_request:
+    branches: [main, development]
+    paths:
+      - 'scripts/receiver-entrypoint.sh'
+      - 'scripts/test-receiver-entrypoint.sh'
+      - '.github/workflows/receiver-config-ci.yml'
+  push:
+    branches: [main, development]
+    paths:
+      - 'scripts/receiver-entrypoint.sh'
+      - 'scripts/test-receiver-entrypoint.sh'
+      - '.github/workflows/receiver-config-ci.yml'
+
+jobs:
+  receiver-config-test:
+    name: Receiver RTMP target tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate shell syntax
+        run: |
+          bash -n scripts/receiver-entrypoint.sh
+          bash -n scripts/test-receiver-entrypoint.sh
+
+      - name: Run receiver RTMP target tests
+        run: bash scripts/test-receiver-entrypoint.sh
